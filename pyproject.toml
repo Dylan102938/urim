@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "urim"
+version = "0.1.0"
+description = "CLI utilities for LLM research: quick dataset creation, evaluations, chat, and inference."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "urim contributors" }]
+license = { text = "MIT" }
+keywords = ["llm", "nlp", "cli", "research", "evaluation", "dataset"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+]
+# Minimal runtime deps; expand as features land
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.7",
+  "openai>=1.40",
+  "backoff>=2.2.1",
+  "readerwriterlock>=1.0.9",
+  "pandas>=2.0",
+  "datasets>=2.19",
+  "python-dotenv>=1.1.1",
+]
+
+[project.scripts]
+urim = "urim.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/urim"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+markers = [
+  "requires_llm: mark test as requiring LLM network or prompts",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP"]
+ignore = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true
