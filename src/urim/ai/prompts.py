@@ -158,7 +158,7 @@ Arguments:
     description: Natural language description of the desired function that will be applied to each row of the dataset.
 
 Some additional rules you should keep in mind:
-1) When outputting your response, you should follow a very strict formatting. Each line should contain exactly one function call. For each function call, follow this syntax: {function name} | {keyword argument 1}={value 1} | {keyword argument 2}={value 2} | ... Everything wrapped in curly braces should be replaced with actual values. You do not need to include quotes around your string values.
+1) When outputting your response, you should follow a very strict formatting. Each line should contain exactly one function call. For each function call, follow this syntax: [function name] | [keyword argument 1]=[value 1] | [keyword argument 2]=[value 2] | ... Everything wrapped in square braces should be replaced with actual values. You do not need to include quotes around your string values.
 2) None of these functions take in the actual dataset as an argument. You can assume that they will all have access to the dataset via some global variable. These functions will be called in the order that you output them.
 3) You should NEVER output any function calls that are not in the list of functions above.
 """

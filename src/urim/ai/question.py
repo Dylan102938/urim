@@ -5,8 +5,9 @@ import hashlib
 import inspect
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, TypeAlias, TypeVar
 
@@ -83,18 +84,53 @@ class Question(ABC, Generic[EvalType]):
         return hashlib.sha256(json_str.encode()).hexdigest()
 
     def resolve(
-        self, model: str, *, executor: ThreadPoolExecutor | None = None
+        self,
+        model: str,
+        *,
+        executor: ThreadPoolExecutor | None = None,
+        **fill_prompt_kwargs,
     ) -> QuestionResult[EvalType]:
-        if self.enable_cache:
-            cached = _DEFAULT_CACHE.read(self, model, executor=executor)
-            if cached is not None:
-                return cached
+        with self.fill_template(**fill_prompt_kwargs) as filled_question:
+            if filled_question.enable_cache:
+                cached = _DEFAULT_CACHE.read(filled_question, model, executor=executor)
+                if cached is not None:
+                    return cached
 
-        fresh = self.fetch(model)
-        if self.enable_cache:
-            _DEFAULT_CACHE.set(self, model, fresh)
+            fresh = filled_question.fetch(model)
+            if filled_question.enable_cache:
+                _DEFAULT_CACHE.set(filled_question, model, fresh)
 
-        return fresh
+            return fresh
+
+    def copy(self) -> Question:
+        return self.__class__(
+            prompt=self.prompt,
+            messages=self.messages,
+            system=self.system,
+            enable_cache=self.enable_cache,
+            cache_dir=self.cache_dir,
+        )
+
+    @contextmanager
+    def fill_template(self, **templated_kwargs) -> Iterator[Question]:
+        question = self.copy()
+        if question.prompt is not None:
+            question.prompt = question.prompt.format(**templated_kwargs)
+        if question.system is not None:
+            question.system = question.system.format(**templated_kwargs)
+        if question.messages is not None:
+            question.messages = [
+                {
+                    "role": m["role"],
+                    "content": m["content"].format(**templated_kwargs),
+                }
+                for m in question.messages
+            ]
+
+        try:
+            yield question
+        finally:
+            pass
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:
@@ -111,11 +147,11 @@ class FreeForm(Question[str]):
     def __init__(
         self,
         *args,
-        judge: JudgeQuestion | None = None,
+        judges: dict[str, tuple[JudgeQuestion, str]] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self.judge = judge
+        self.judges = judges
 
     def fetch(self, model: str) -> QuestionResult[str]:
         if self.messages is None:
@@ -128,14 +164,17 @@ class FreeForm(Question[str]):
 
         completion = LLM().chat_completion(model, messages=messages, **self.kwargs)
 
-        judge_result: str | int | float | bool | None = None
-        if self.judge is not None:
-            judge_result, _ = self.judge.resolve(model)
+        judge_results: dict[str, str | int | float | bool] = {}
+        if self.judges is not None:
+            for judge_name, (judge, judge_model) in self.judges.items():
+                judge_result, _ = judge.resolve(
+                    judge_model,
+                    prompt=self.prompt,
+                    messages=self.messages,
+                )
+                judge_results[judge_name] = judge_result
 
-        return (
-            completion.content or "",
-            {"judge": judge_result} if judge_result is not None else {},
-        )
+        return (completion.content or "", judge_results)
 
 
 class ExtractJSON(FreeForm):
@@ -200,8 +239,8 @@ class Rating(Question[float]):
     def __init__(
         self,
         *args,
-        min_rating: float = 0.0,
-        max_rating: float = 100.0,
+        min_rating: float | None = None,
+        max_rating: float | None = None,
         refusal_threshold: float = 0.75,
         top_logprobs: int = 20,
         **kwargs,
@@ -240,9 +279,13 @@ class Rating(Question[float]):
                 int_key = int(key)
             except ValueError:
                 continue
-            if self.min_rating <= int_key <= self.max_rating:
-                sum_ += int_key * val
-                total += val
+            if self.min_rating and self.min_rating > int_key:
+                continue
+            if self.max_rating and self.max_rating < int_key:
+                continue
+
+            sum_ += int_key * val
+            total += val
 
         refusal_weight = 1 - total
         if refusal_weight >= self.refusal_threshold:

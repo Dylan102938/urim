@@ -14,7 +14,7 @@ from rich.progress import (
     TextColumn,
 )
 from rich.prompt import Prompt
-from rich.table import Table
+from rich.table import Column, Table
 
 from urim.env import UrimState
 
@@ -118,7 +118,7 @@ class RichLogger:
     @classmethod
     def update_working_dataset(cls, new_dataset_path: Path) -> None:
         update_working_dataset = Prompt.ask(
-            f"[{Colors.QUESTION.value}]Update working"
+            f":pushpin: [{Colors.QUESTION.value}]Update working"
             f" dataset?[/{Colors.QUESTION.value}]",
             choices=["y", "n"],
             default="y",
@@ -132,9 +132,8 @@ class RichLogger:
         return Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=250),
-            TextColumn("{task.completed}/{task.total}", justify="right"),
-            expand=True,
+            BarColumn(bar_width=80, table_column=Column(ratio=10)),
+            TextColumn("{task.completed}/{task.total}"),
         )
 
     @classmethod

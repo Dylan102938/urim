@@ -5,6 +5,7 @@ from typing import Any
 
 import typer
 
+from urim.ai.question import Rating
 from urim.cli.utils import (
     parse_kv,
     random_filestub,
@@ -362,13 +363,18 @@ def generate(
         "gpt-4.1", "-m", "--model", help="Model to use for generation."
     ),
     max_workers: int = typer.Option(
-        20, "--max-workers", help="Maximum concurrent workers for generation."
+        100, "--max-workers", help="Maximum concurrent workers for generation."
     ),
     system_prompt: str | None = typer.Option(
         None,
         "-s",
         "--system",
         help="System prompt to use for generation. Reads from file if provided.",
+    ),
+    judges: list[str] = typer.Option(
+        [],
+        "--judge",
+        help="Pass in templates for a Generation Rating judge (repeatable).",
     ),
     out: Path | None = typer.Option(
         None,
@@ -389,6 +395,10 @@ def generate(
     if system_prompt and Path(system_prompt).exists():
         system_prompt = Path(system_prompt).read_text()
 
+    judge_dict = parse_kv(judges or [])
+    judge_dict = {
+        k: (Rating(template), "gpt-4.1") for k, template in judge_dict.items()
+    }
     ds.generate(
         question_col=question_col,
         messages_col=messages_col,
@@ -396,9 +406,36 @@ def generate(
         model=model,
         max_workers=max_workers,
         system=system_prompt,
+        judges=judge_dict,
         **question_kwargs,
     )
     ds.to_json(str(output_path))
 
     RichLogger.print_output_to_filepath(output_path)
     RichLogger.update_working_dataset(output_path)
+
+
+@dataset_app.command()
+def describe(
+    ctx: typer.Context,
+    hint: str = typer.Option(
+        ..., "-h", "--hint", help="Autogenerate describe args using this hint."
+    ),
+    model: str = typer.Option(
+        "gpt-4.1", "-m", "--model", help="Model to use for generation."
+    ),
+    out: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="Output filepath. Defaults to a random filestub if not provided.",
+    ),
+) -> None:
+    ds: Dataset = ctx.obj
+    ouptut_path = get_output_path(out)
+
+    ds.describe(hint=hint, model=model)
+    ds.to_json(str(ouptut_path))
+
+    RichLogger.print_output_to_filepath(ouptut_path)
+    RichLogger.update_working_dataset(ouptut_path)
