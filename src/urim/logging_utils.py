@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
-from typing import Literal
+from typing import Any, cast
 
 import pandas as pd  # type: ignore[import-untyped]
 from rich import box
@@ -13,10 +12,10 @@ from rich.progress import (
     SpinnerColumn,
     TextColumn,
 )
-from rich.prompt import Prompt
 from rich.table import Column, Table
+from rich.tree import Tree
 
-from urim.env import UrimState
+from urim.env import UrimDatasetGraph
 
 
 class Colors(Enum):
@@ -102,6 +101,7 @@ class RichLogger:
             subject="SUCCESS",
             body=message,
             subject_color=Colors.SUCCESS,
+            first_emoji="✅",
         )
 
     @classmethod
@@ -116,18 +116,6 @@ class RichLogger:
         )
 
     @classmethod
-    def update_working_dataset(cls, new_dataset_path: Path) -> None:
-        update_working_dataset = Prompt.ask(
-            f":pushpin: [{Colors.QUESTION.value}]Update working"
-            f" dataset?[/{Colors.QUESTION.value}]",
-            choices=["y", "n"],
-            default="y",
-        )
-
-        if update_working_dataset == "y":
-            UrimState.update("working_dataset", new_dataset_path)
-
-    @classmethod
     def progress_bar(cls) -> Progress:
         return Progress(
             SpinnerColumn(),
@@ -137,31 +125,112 @@ class RichLogger:
         )
 
     @classmethod
-    def print_output_to_filepath(cls, out: Path) -> None:
-        cls.decorated_print(
-            subject="Success!",
-            body=(
-                f"Output written to [bold {Colors.INFO.value}]{out}.[/bold"
-                f" {Colors.INFO.value}]"
-            ),
-            first_emoji=":white_check_mark:",
-        )
+    def table(
+        cls,
+        title: str | None = None,
+        max_width: int | None = None,
+        **columns,
+    ) -> None:
+        column_names = list(columns.keys())
+        table = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+
+        for name in column_names:
+            table.add_column(str(name), justify="left", overflow="fold")
+
+        max_rows = 0
+        for values in columns.values():
+            max_rows = max(max_rows, len(values))
+
+        for row_idx in range(max_rows):
+            row_values: list[str] = []
+            for name in column_names:
+                values = columns.get(name, [])
+                value = values[row_idx] if row_idx < len(values) else ""
+                cell = "" if value is None else str(value)
+                if max_width is not None and len(cell) > max_width:
+                    cell = cell[: max_width - 1] + "…"
+                row_values.append(cell)
+            table.add_row(*row_values)
+
+        prettyprint(table)
 
     @classmethod
     def print_dataframe(
         cls, df: pd.DataFrame, title: str | None = None, show_index: bool = True
     ) -> None:
-        table = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+        columns: dict[str, list[Any]] = {}
         if show_index:
-            table.add_column(df.index.name or "index", justify="right", style="dim")
+            index_name = df.index.name or "index"
+            columns[index_name] = ["" if v is None else v for v in df.index.tolist()]
 
         for col in df.columns:
-            justify: Literal["right", "left"] = (
-                "right" if pd.api.types.is_numeric_dtype(df[col]) else "left"
-            )
-            table.add_column(str(col), justify=justify, overflow="fold")
+            columns[col] = ["" if v is None else v for v in df[col].tolist()]
 
-        for row in df.itertuples(index=show_index, name=None):
-            table.add_row(*[("" if v is None else str(v)) for v in row])
+        cls.table(title, max_width=None, **columns)
 
-        prettyprint(table)
+    @classmethod
+    def print_ds_history(
+        cls, graph: UrimDatasetGraph | None = None, node: str | None = None
+    ) -> None:
+        graph = graph or UrimDatasetGraph.from_file()
+        node = node or graph.working_dataset
+
+        assert node is not None
+
+        idx, ds, cmd = cast(tuple[list, list, list], ([], [], []))
+        path_from_root = graph.path_from_root(node)
+        for i, node_id in enumerate(path_from_root):
+            node_obj = graph.get_node(node_id)
+            assert node_obj is not None
+
+            idx.append(i)
+            ds.append(node_id)
+            cmd.append(node_obj.command or "")
+
+        cls.table(
+            max_width=100,
+            Index=idx,
+            Dataset=ds,
+            Command=cmd,
+        )
+
+    @classmethod
+    def print_ds_status(
+        cls,
+        graph: UrimDatasetGraph | None = None,
+        *,
+        fast: bool = False,
+    ) -> None:
+        graph = graph or UrimDatasetGraph.from_file()
+
+        wd = graph.working_dataset
+        assert (
+            wd is not None
+        ), "No working dataset is set. Run with -n first to load a new dataset."
+
+        cls.decorated_print(
+            first_emoji=":star:",
+            subject="Working Dataset",
+            body=wd,
+            subject_color=Colors.INFO,
+        )
+
+        if fast:
+            return
+
+        roots = [
+            node_id for node_id, node in graph.graph.items() if node.parent is None
+        ]
+
+        forest = Tree(f":deciduous_tree: [{Colors.QUESTION.value}]Datasets")
+
+        def add_children(parent_tree: Tree, parent_id: str) -> None:
+            for child_id in graph.children(parent_id):
+                child_tree = parent_tree.add(child_id)
+                add_children(child_tree, child_id)
+
+        for root_id in sorted(roots):
+            root_tree = forest.add(root_id)
+            add_children(root_tree, root_id)
+
+        prettyprint(forest)

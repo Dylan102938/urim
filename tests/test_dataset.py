@@ -197,7 +197,6 @@ def test_generate_with_messages_col() -> None:
         }
     )
     ds = Dataset(df=df)
-    # Disable cache in generated questions to avoid cache writer signals in threads
     ds.generate(
         messages_col="messages",
         out_col="out",
@@ -216,15 +215,14 @@ def test_load_path_exists(tmp_path: Path) -> None:
     path = tmp_path / "exists.jsonl"
     df.to_json(path, orient="records", lines=True)
 
-    ds = Dataset.load(str(path))
+    _, ds = Dataset.load(str(path))
     assert list(ds.df()["id"]) == [1]
 
 
 def test_load_hf_branch_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Avoid network; stub the classmethod load_from_hf
     def _stub(name: str, subset: str | None = None, **kwargs):  # noqa: ANN001, ANN201
         _ = (name, subset, kwargs)
-        return Dataset(df=pd.DataFrame({"id": [42]}))
+        return "stubbed", Dataset(df=pd.DataFrame({"id": [42]}))
 
     monkeypatch.setattr(
         Dataset,
@@ -234,5 +232,5 @@ def test_load_hf_branch_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
 
-    ds = Dataset.load("definitely-not-a-path")
+    _, ds = Dataset.load("definitely-not-a-path")
     assert list(ds.df()["id"]) == [42]

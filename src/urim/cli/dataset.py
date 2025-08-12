@@ -1,30 +1,76 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
+import pandas as pd  # type: ignore[import-untyped]
 import typer
 
 from urim.ai.question import Rating
-from urim.cli.utils import (
-    parse_kv,
-    random_filestub,
-)
+from urim.cli.utils import parse_kv, random_filestub
 from urim.dataset import Dataset
-from urim.env import URIM_HOME, UrimState
+from urim.env import URIM_HOME, UrimDatasetGraph
 from urim.logging_utils import RichLogger
 
 dataset_app = typer.Typer(help="Dataset utilities: creation and inspection.")
 
 
-def get_output_path(out: Path | None) -> Path:
-    if out is None:
-        return URIM_HOME / "datasets" / f"{random_filestub()}.jsonl"
+def get_ds_id(explicit_id: str | None = None) -> str:
+    if explicit_id is not None:
+        assert not Path(
+            explicit_id
+        ).exists(), f"Dataset with id={explicit_id} already exists"
+        return explicit_id
 
-    return out
+    for _ in range(5):
+        id = random_filestub()
+        if not Path(id).exists():
+            return id
+
+    raise RuntimeError(
+        "Failed to find a unique dataset id. You may want to consider running urim"
+        " clean."
+    )
 
 
-@dataset_app.callback()
+def get_ds_path(id: str) -> Path:
+    return URIM_HOME / "datasets" / f"{id}.jsonl"
+
+
+def create_next_wd(
+    graph: UrimDatasetGraph,
+    command: str,
+    new_dataset: Dataset,
+    new_dataset_id: str | None = None,
+) -> None:
+    assert graph.working_dataset is not None
+
+    new_ds_id = new_dataset_id or get_ds_id()
+    new_ds_path = get_ds_path(new_ds_id)
+
+    new_dataset.to_json(new_ds_path.as_posix())
+    graph.add_child_and_set_wd(graph.working_dataset, new_ds_id, command=command)
+    RichLogger.success(
+        f"New dataset created: {new_ds_id}. Working dataset set to"
+        f" {URIM_HOME / 'datasets' / new_ds_id}.jsonl."
+    )
+
+
+class DatasetContext:
+    graph: UrimDatasetGraph
+    dataset: Dataset
+
+    def __init__(
+        self,
+        graph: UrimDatasetGraph,
+        dataset: Dataset,
+    ):
+        self.graph = graph
+        self.dataset = dataset
+
+
+@dataset_app.callback(invoke_without_command=True)
 def setup_local_dataset(
     ctx: typer.Context,
     dataset: str | None = typer.Option(
@@ -69,25 +115,151 @@ def setup_local_dataset(
         help="Additional keyword args as key=value (repeatable).",
     ),
 ) -> None:
+    graph = UrimDatasetGraph.from_file()
     if dataset is None:
-        dataset = str(UrimState.from_state_file().working_dataset)
-        assert (
-            dataset is not None
-        ), "You need to pass in a dataset name since there is no working dataset."
+        working_ds_id = graph.working_dataset
+        if ctx.invoked_subcommand not in {None, "status"}:
+            assert working_ds_id is not None, (
+                "No dataset loaded, either set a working dataset or pass in a"
+                " dataset name via -n."
+            )
+        else:
+            ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
+            if ctx.invoked_subcommand is None:
+                ctx.invoke(status, ctx, fast=False)
+            return
 
-    parsed_kwargs = parse_kv(kwargs or [])
-    ds = Dataset.load(
-        dataset,
-        data_dir=data_dir,
-        cache_dir=cache_dir,
-        token=token,
-        split=split,
-        num_proc=num_proc,
-        subset=subset,
-        **parsed_kwargs,
+        _, ds = Dataset.load_from_id(working_ds_id)
+    else:
+        parsed_kwargs = parse_kv(kwargs or [])
+        working_ds_id, ds = Dataset.load(
+            dataset,
+            data_dir=data_dir,
+            cache_dir=cache_dir,
+            token=token,
+            split=split,
+            num_proc=num_proc,
+            subset=subset,
+            **parsed_kwargs,
+        )
+        graph.set_working_dataset(working_ds_id)
+
+    ctx.obj = DatasetContext(graph=graph, dataset=ds)
+
+
+@dataset_app.command()
+def status(ctx: typer.Context, fast: bool = typer.Option(False, "--fast")) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+    RichLogger.print_ds_status(ctx_obj.graph, fast=fast)
+
+
+@dataset_app.command()
+def history(ctx: typer.Context) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+    assert ctx_obj.graph.working_dataset is not None
+
+    RichLogger.print_ds_history(ctx_obj.graph, ctx_obj.graph.working_dataset)
+
+
+@dataset_app.command()
+def goto(
+    ctx: typer.Context,
+    id: str = typer.Argument(
+        ..., help="Dataset id or step index from root to navigate to."
+    ),
+) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+    assert ctx_obj.graph.working_dataset is not None
+
+    try:
+        idx = int(id)
+        path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
+        assert 0 <= idx < len(path_from_root), f"Invalid step index: {idx}"
+        new_wd_id = path_from_root[idx]
+    except IndexError as e:
+        raise typer.BadParameter(f"Invalid step index: {id}") from e
+    except ValueError:
+        node = ctx_obj.graph.get_node(id)
+        assert node is not None, f"Invalid dataset id: {id}"
+        new_wd_id = id
+
+    ctx_obj.graph.set_working_dataset(new_wd_id)
+
+    RichLogger.success(f"Working dataset set to {new_wd_id}.")
+
+
+@dataset_app.command()
+def back(ctx: typer.Context) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+    assert ctx_obj.graph.working_dataset is not None
+
+    path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
+    if len(path_from_root) <= 1:
+        print("Already at the root dataset")
+    else:
+        ctx.invoke(goto, ctx, id=path_from_root[-2])
+
+
+@dataset_app.command()
+def root(ctx: typer.Context) -> None:
+    ctx.invoke(goto, ctx, id=0)
+
+
+@dataset_app.command()
+def export(
+    ctx: typer.Context,
+    out: Path = typer.Argument(
+        ...,
+        help="Output filepath. Defaults to a random filestub if not provided.",
+        dir_okay=False,
+        file_okay=True,
+        resolve_path=True,
+    ),
+) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+
+    ds = ctx_obj.dataset
+    ds.to_json(out.as_posix())
+
+    RichLogger.success(f"Exported dataset to {out}.")
+
+
+@dataset_app.command()
+def prune(
+    ctx: typer.Context,
+    root: bool = typer.Option(
+        False,
+        "-r",
+        "--root",
+        help="Prune from the root dataset.",
+    ),
+    from_id: str | None = typer.Option(
+        None,
+        "-f",
+        "--from",
+        help="Prune dataset mutation tree from this id.",
+    ),
+) -> None:
+    ctx_obj: DatasetContext = ctx.obj
+    assert ctx_obj.graph.working_dataset is not None
+
+    path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
+    if root:
+        ctx_obj.graph.prune_from_node(path_from_root[0])
+    elif from_id is not None:
+        try:
+            node_idx = int(from_id)
+            node_id = path_from_root[node_idx]
+        except ValueError:
+            node_id = from_id
+
+        ctx_obj.graph.prune_from_node(node_id)
+    else:
+        ctx_obj.graph.prune_from_node(path_from_root[-1])
+
+    RichLogger.success(
+        f"Pruned dataset(s). Set working dataset to {ctx_obj.graph.working_dataset}"
     )
-
-    ctx.obj = ds
 
 
 @dataset_app.command()
@@ -100,9 +272,8 @@ def head(
         help="Number of rows to show.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
-
-    RichLogger.print_dataframe(ds.df().head(n))
+    ctx_obj: DatasetContext = ctx.obj
+    RichLogger.print_dataframe(ctx_obj.dataset.df().head(n))
 
 
 @dataset_app.command()
@@ -118,20 +289,20 @@ def sample(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
+    ctx_obj: DatasetContext = ctx.obj
     assert n_or_frac > 0, "Must take a postive number of samples from the dataset"
 
-    ds: Dataset = ctx.obj
-    output_path = get_output_path(out)
+    ds = ctx_obj.dataset
 
     if n_or_frac > 1:
         ds.sample(n=int(n_or_frac))
     else:
         ds.sample(frac=n_or_frac)
 
-    ds.to_json(str(output_path))
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -159,16 +330,17 @@ def rename(
         resolve_path=True,
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
+    ctx_obj: DatasetContext = ctx.obj
 
-    output_path = get_output_path(out)
+    ds = ctx_obj.dataset
     rename_map = parse_kv(columns or []) or None
 
     ds.rename(columns=rename_map, hint=hint)
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -193,15 +365,15 @@ def drop(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
+    ctx_obj: DatasetContext = ctx.obj
 
-    output_path = get_output_path(out)
-
+    ds = ctx_obj.dataset
     ds.drop(columns=columns, hint=hint)
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -220,15 +392,15 @@ def filter(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
+    ctx_obj: DatasetContext = ctx.obj
 
-    output_path = get_output_path(out)
-
+    ds = ctx_obj.dataset
     ds.filter(hint=hint)
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -253,15 +425,16 @@ def apply(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
+    ctx_obj: DatasetContext = ctx.obj
 
-    output_path = get_output_path(out)
+    ds = ctx_obj.dataset
 
     ds.apply(column=column, hint=hint)
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -295,15 +468,15 @@ def merge(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
-    other_ds = Dataset.load(other)
+    ctx_obj: DatasetContext = ctx.obj
 
-    valid_hows = {"left", "right", "inner", "outer", "cross"}
+    ds = ctx_obj.dataset
+    _, other_ds = Dataset.load(other)
+
+    valid_hows = {"left", "right", "inner", "outer", "cross"}  # type: ignore[assignment]
     how_lower = how.lower() if how else None
     if how_lower is not None:
         assert how_lower in valid_hows, f"--how must be one of {sorted(valid_hows)}"
-
-    output_path = get_output_path(out)
 
     ds.merge(
         other_ds,
@@ -313,10 +486,11 @@ def merge(
         how=how_lower,  # type: ignore[arg-type]
         hint=hint,
     )
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -335,16 +509,17 @@ def concat(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
-    other_ds = Dataset.load(other)
+    ctx_obj: DatasetContext = ctx.obj
 
-    output_path = get_output_path(out)
+    ds = ctx_obj.dataset
+    _, other_ds = Dataset.load(other)
 
     ds.concat(other_ds, hint=hint)
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -388,8 +563,9 @@ def generate(
         [], "--kw", help="Additional question kwargs as key=value (repeatable)."
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
-    output_path = get_output_path(out)
+    ctx_obj: DatasetContext = ctx.obj
+
+    ds = ctx_obj.dataset
     question_kwargs: dict[str, Any] = parse_kv(kwargs or [])
 
     if system_prompt and Path(system_prompt).exists():
@@ -409,10 +585,11 @@ def generate(
         judges=judge_dict,
         **question_kwargs,
     )
-    ds.to_json(str(output_path))
 
-    RichLogger.print_output_to_filepath(output_path)
-    RichLogger.update_working_dataset(output_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -431,11 +608,12 @@ def describe(
         help="Output filepath. Defaults to a random filestub if not provided.",
     ),
 ) -> None:
-    ds: Dataset = ctx.obj
-    ouptut_path = get_output_path(out)
+    ctx_obj: DatasetContext = ctx.obj
 
+    ds = ctx_obj.dataset
     ds.describe(hint=hint, model=model)
-    ds.to_json(str(ouptut_path))
 
-    RichLogger.print_output_to_filepath(ouptut_path)
-    RichLogger.update_working_dataset(ouptut_path)
+    create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
