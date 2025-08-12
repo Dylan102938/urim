@@ -1,4 +1,5 @@
 import hashlib
+import shutil
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,6 +37,11 @@ def get_hf_dataset_local_id(**kwargs) -> str:
     serialized_id = hashlib.sha256(semantic_id.encode()).hexdigest()
 
     return serialized_id
+
+
+def get_dataset_local_id(path: Path) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read(200 * 1024)).hexdigest()
 
 
 class Dataset:
@@ -374,20 +380,39 @@ class Dataset:
         return self
 
     @classmethod
-    def load_from_local(cls, path: str) -> Self:
-        return cls(input_path=path)
+    def is_valid_id(cls, id: str) -> bool:
+        path = URIM_HOME / "datasets" / f"{id}.jsonl"
+        return path.exists()
 
     @classmethod
-    def load_from_hf(cls, name: str, subset: str | None = None, **kwargs) -> Self:
+    def load_from_id(cls, id: str) -> tuple[str, Self]:
+        assert cls.is_valid_id(id), f"Dataset {id} not found"
+        return id, cls(input_path=str(URIM_HOME / "datasets" / f"{id}.jsonl"))
+
+    @classmethod
+    def load_from_local(cls, path: Path) -> tuple[str, Self]:
+        if path.is_relative_to(URIM_HOME / "datasets"):
+            ds_id = path.relative_to(URIM_HOME / "datasets").with_suffix("").name
+        else:
+            assert path.exists() and path.is_file(), f"Dataset {path} not found"
+            ds_id = get_dataset_local_id(path)
+            shutil.copy2(path, URIM_HOME / "datasets" / f"{ds_id}.jsonl")
+
+        return cls.load_from_id(ds_id)
+
+    @classmethod
+    def load_from_hf(
+        cls, name: str, subset: str | None = None, **kwargs
+    ) -> tuple[str, Self]:
         ds_id = get_hf_dataset_local_id(name=name, subset=subset, **kwargs)
-        path = URIM_HOME / "datasets" / f"{ds_id}.jsonl"
-        if path.exists():
-            return cls(input_path=str(path))
+        if not cls.is_valid_id(ds_id):
+            ds = cast(HFDataset, load_dataset(name, subset, **kwargs))
+            ds.to_json(
+                URIM_HOME / "datasets" / f"{ds_id}.jsonl", orient="records", lines=True
+            )
 
-        ds = cast(HFDataset, load_dataset(name, subset, **kwargs))
-        ds.to_json(path)
-
-        return cls(df=cast(pd.DataFrame, ds.to_pandas()))
+        assert cls.is_valid_id(ds_id)
+        return cls.load_from_id(ds_id)
 
     @classmethod
     def load(
@@ -401,9 +426,12 @@ class Dataset:
         num_proc: int | None = None,
         subset: str | None = None,
         **kwargs,
-    ) -> Self:
-        if Path(name).exists():
-            return cls.load_from_local(name)
+    ) -> tuple[str, Self]:
+        path = Path(name)
+        if cls.is_valid_id(name):
+            return cls.load_from_id(name)
+        elif path.exists() and path.is_file():
+            return cls.load_from_local(path)
         else:
             return cls.load_from_hf(
                 name,

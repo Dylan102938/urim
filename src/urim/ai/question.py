@@ -103,13 +103,18 @@ class Question(ABC, Generic[EvalType]):
             return fresh
 
     def copy(self) -> Question:
-        return self.__class__(
+        q = self.__class__(
             prompt=self.prompt,
             messages=self.messages,
             system=self.system,
             enable_cache=self.enable_cache,
             cache_dir=self.cache_dir,
+            **self.kwargs,
         )
+        for k, v in self.__dict__.items():
+            setattr(q, k, v)
+
+        return q
 
     @contextmanager
     def fill_template(self, **templated_kwargs) -> Iterator[Question]:
@@ -169,8 +174,9 @@ class FreeForm(Question[str]):
             for judge_name, (judge, judge_model) in self.judges.items():
                 judge_result, _ = judge.resolve(
                     judge_model,
-                    prompt=self.prompt,
+                    question=self.prompt,
                     messages=self.messages,
+                    answer=completion.content or "",
                 )
                 judge_results[judge_name] = judge_result
 
