@@ -93,18 +93,27 @@ class UrimDatasetGraph(BaseModel):
         return self._path_from_root_cache[node_id]
 
     def prune_from_node(
-        self, node_id: str, set_working_dataset: bool = True, save: bool = True
-    ):
+        self, node_id: str, is_base_node: bool = True, save: bool = True
+    ) -> None:
         node = self.get_node(node_id)
         assert node is not None
-        for child_id in node.children:
-            self.prune_from_node(child_id, set_working_dataset=False, save=False)
+        for child_id in list(node.children):
+            if self.get_node(child_id) is not None:
+                self.prune_from_node(child_id, is_base_node=False, save=False)
 
-        if set_working_dataset:
+        if is_base_node:
             self.set_working_dataset(node.parent, save=False)
+            if self.working_dataset is not None:
+                curr_node = self.get_node(self.working_dataset)
+                assert curr_node is not None
+                if node_id in curr_node.children:
+                    curr_node.children.pop(curr_node.children.index(node_id))
 
-        self.graph.pop(node_id)
-        os.remove(URIM_HOME / "datasets" / f"{node_id}.jsonl")
+        self.graph.pop(node_id, None)
+
+        ds_path = URIM_HOME / "datasets" / f"{node_id}.jsonl"
+        if ds_path.exists():
+            os.remove(ds_path)
 
         if save:
             self.save()

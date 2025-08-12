@@ -199,7 +199,7 @@ class RichLogger:
         cls,
         graph: UrimDatasetGraph | None = None,
         *,
-        rich: bool = False,
+        fast: bool = False,
     ) -> None:
         graph = graph or UrimDatasetGraph.from_file()
 
@@ -215,7 +215,7 @@ class RichLogger:
             subject_color=Colors.INFO,
         )
 
-        if not rich:
+        if fast:
             return
 
         roots = [

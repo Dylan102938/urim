@@ -396,7 +396,9 @@ class Dataset:
         else:
             assert path.exists() and path.is_file(), f"Dataset {path} not found"
             ds_id = get_dataset_local_id(path)
-            shutil.copy2(path, URIM_HOME / "datasets" / f"{ds_id}.jsonl")
+            dest_dir = URIM_HOME / "datasets"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest_dir / f"{ds_id}.jsonl")
 
         return cls.load_from_id(ds_id)
 

@@ -53,7 +53,7 @@ def create_next_wd(
     graph.add_child_and_set_wd(graph.working_dataset, new_ds_id, command=command)
     RichLogger.success(
         f"New dataset created: {new_ds_id}. Working dataset set to"
-        f" {URIM_HOME / 'datasets' / new_ds_id}."
+        f" {URIM_HOME / 'datasets' / new_ds_id}.jsonl."
     )
 
 
@@ -126,7 +126,7 @@ def setup_local_dataset(
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
             if ctx.invoked_subcommand is None:
-                ctx.invoke(status, ctx, rich=False)
+                ctx.invoke(status, ctx, fast=False)
             return
 
         _, ds = Dataset.load_from_id(working_ds_id)
@@ -148,9 +148,9 @@ def setup_local_dataset(
 
 
 @dataset_app.command()
-def status(ctx: typer.Context, rich: bool = typer.Option(False, "--rich")) -> None:
+def status(ctx: typer.Context, fast: bool = typer.Option(False, "--fast")) -> None:
     ctx_obj: DatasetContext = ctx.obj
-    RichLogger.print_ds_status(ctx_obj.graph, rich=rich)
+    RichLogger.print_ds_status(ctx_obj.graph, fast=fast)
 
 
 @dataset_app.command()
