@@ -197,7 +197,6 @@ def test_generate_with_messages_col() -> None:
         }
     )
     ds = Dataset(df=df)
-    # Disable cache in generated questions to avoid cache writer signals in threads
     ds.generate(
         messages_col="messages",
         out_col="out",
