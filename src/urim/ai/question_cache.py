@@ -180,13 +180,15 @@ class QuestionCache:
     def __del__(self) -> None:
         self.stop()
 
-    def set(self, question: Question, model: str, result: Any) -> None:
+    def set(
+        self, question: Question, model: str, result: Any, **fill_prompt_kwargs
+    ) -> None:
         if self._q is None:
             self.start()
 
         assert self._q is not None
 
-        qhash = question.hash()
+        qhash = question.hash(**fill_prompt_kwargs)
         msg = {"op": "set", "model": model, "question_hash": qhash, "result": result}
 
         for _ in range(2):
@@ -203,8 +205,9 @@ class QuestionCache:
         model: str,
         *,
         executor: ThreadPoolExecutor | None = None,
+        **fill_prompt_kwargs,
     ) -> Any | None:
-        qhash = question.hash()
+        qhash = question.hash(**fill_prompt_kwargs)
         pages = Page.list(self.cache_dir / model, max_rows=self.page_size)
         pages_rev = list(reversed(pages))
 

@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd  # type: ignore[import-untyped]
 import typer
 
-from urim.ai.question import Rating
+from urim.ai.question import QuestionFactory, Rating
 from urim.cli.utils import parse_kv, random_filestub
 from urim.dataset import Dataset
 from urim.env import URIM_HOME, UrimDatasetGraph
@@ -301,9 +301,6 @@ def sample(
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
-    if out is not None:
-        ctx.invoke(export, out)
-
 
 @dataset_app.command()
 def rename(
@@ -572,9 +569,12 @@ def generate(
         system_prompt = Path(system_prompt).read_text()
 
     judge_dict = parse_kv(judges or [])
-    judge_dict = {
-        k: (Rating(template), "gpt-4.1") for k, template in judge_dict.items()
-    }
+    for k, template in judge_dict.items():
+        judge_dict[k] = (
+            QuestionFactory(type=Rating, prompt=template),
+            "gpt-4.1",
+        )
+
     ds.generate(
         question_col=question_col,
         messages_col=messages_col,

@@ -5,11 +5,12 @@ import hashlib
 import inspect
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generic, TypeAlias, TypeVar
+from typing import Any, Generic, TypeVar
+
+from pydantic import BaseModel, Field
 
 from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
@@ -27,6 +28,8 @@ def _to_hashable(value: Any) -> Any:
         return value
     if isinstance(value, Question):
         return {"question_type": value.__class__.__name__, "hash": value.hash()}
+    if isinstance(value, QuestionFactory):
+        return {"question_factory": value.model_dump()}
     if isinstance(value, dict):
         return {
             str(k): _to_hashable(v)
@@ -42,6 +45,39 @@ def _to_hashable(value: Any) -> Any:
         return {"callable": src}
 
     return value
+
+
+class QuestionFactory(BaseModel):
+    type: type[Question] = Field(default_factory=lambda: FreeForm, exclude=True)
+    prompt: str | None = None
+    messages: list[dict] | None = None
+    system: str | None = None
+    enable_cache: bool = True
+    cache_dir: str | None = None
+    kwargs: dict[str, Any] = {}
+
+    def resolve(self, **fill_prompt_kwargs) -> Question:
+        if self.prompt is not None:
+            self.prompt = self.prompt.format(**fill_prompt_kwargs)
+        if self.system is not None:
+            self.system = self.system.format(**fill_prompt_kwargs)
+        if self.messages is not None:
+            self.messages = [
+                {
+                    "role": m["role"],
+                    "content": m["content"].format(**fill_prompt_kwargs),
+                }
+                for m in self.messages
+            ]
+
+        return self.type(
+            prompt=self.prompt,
+            messages=self.messages,
+            system=self.system,
+            enable_cache=self.enable_cache,
+            cache_dir=self.cache_dir,
+            **self.kwargs,
+        )
 
 
 class Question(ABC, Generic[EvalType]):
@@ -84,75 +120,30 @@ class Question(ABC, Generic[EvalType]):
         return hashlib.sha256(json_str.encode()).hexdigest()
 
     def resolve(
-        self,
-        model: str,
-        *,
-        executor: ThreadPoolExecutor | None = None,
-        **fill_prompt_kwargs,
+        self, model: str, *, executor: ThreadPoolExecutor | None = None
     ) -> QuestionResult[EvalType]:
-        with self.fill_template(**fill_prompt_kwargs) as filled_question:
-            if filled_question.enable_cache:
-                cached = _DEFAULT_CACHE.read(filled_question, model, executor=executor)
-                if cached is not None:
-                    return cached
+        if self.enable_cache:
+            cached = _DEFAULT_CACHE.read(self, model, executor=executor)
+            if cached is not None:
+                return cached
 
-            fresh = filled_question.fetch(model)
-            if filled_question.enable_cache:
-                _DEFAULT_CACHE.set(filled_question, model, fresh)
+        fresh = self.fetch(model)
+        if self.enable_cache:
+            _DEFAULT_CACHE.set(self, model, fresh)
 
-            return fresh
-
-    def copy(self) -> Question:
-        q = self.__class__(
-            prompt=self.prompt,
-            messages=self.messages,
-            system=self.system,
-            enable_cache=self.enable_cache,
-            cache_dir=self.cache_dir,
-            **self.kwargs,
-        )
-        for k, v in self.__dict__.items():
-            setattr(q, k, v)
-
-        return q
-
-    @contextmanager
-    def fill_template(self, **templated_kwargs) -> Iterator[Question]:
-        question = self.copy()
-        if question.prompt is not None:
-            question.prompt = question.prompt.format(**templated_kwargs)
-        if question.system is not None:
-            question.system = question.system.format(**templated_kwargs)
-        if question.messages is not None:
-            question.messages = [
-                {
-                    "role": m["role"],
-                    "content": m["content"].format(**templated_kwargs),
-                }
-                for m in question.messages
-            ]
-
-        try:
-            yield question
-        finally:
-            pass
+        return fresh
 
     @abstractmethod
-    def fetch(self, model: str) -> QuestionResult[EvalType]:
+    def fetch(self, model: str, **kwargs) -> QuestionResult[EvalType]:
         """Ignores cache and always fetches a fresh response from LLM"""
         ...
-
-
-JudgeQuestion: TypeAlias = (
-    Question[str] | Question[int] | Question[float] | Question[bool]
-)
 
 
 class FreeForm(Question[str]):
     def __init__(
         self,
         *args,
-        judges: dict[str, tuple[JudgeQuestion, str]] | None = None,
+        judges: dict[str, tuple[QuestionFactory, str]] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
@@ -172,12 +163,12 @@ class FreeForm(Question[str]):
         judge_results: dict[str, str | int | float | bool] = {}
         if self.judges is not None:
             for judge_name, (judge, judge_model) in self.judges.items():
-                judge_result, _ = judge.resolve(
-                    judge_model,
-                    question=self.prompt,
+                judge_q = judge.resolve(
+                    prompt=self.prompt,
                     messages=self.messages,
                     answer=completion.content or "",
                 )
+                judge_result, _ = judge_q.resolve(judge_model)
                 judge_results[judge_name] = judge_result
 
         return (completion.content or "", judge_results)
