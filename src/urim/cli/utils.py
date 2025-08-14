@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import string
 from typing import Any
 
 import typer
@@ -158,7 +159,11 @@ ANIMALS = [
 
 
 def random_filestub() -> str:
-    return f"{random.choice(ADJECTIVES)}_{random.choice(ANIMALS)}"
+    return (
+        f"{random.choice(ADJECTIVES)}_"
+        f"{random.choice(ANIMALS)}_"
+        f"{''.join(random.choices(string.ascii_letters + string.digits, k=4))}"
+    )
 
 
 # Reusable Typer option factories

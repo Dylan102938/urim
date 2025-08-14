@@ -57,23 +57,27 @@ class QuestionFactory(BaseModel):
     kwargs: dict[str, Any] = {}
 
     def resolve(self, **fill_prompt_kwargs) -> Question:
-        if self.prompt is not None:
-            self.prompt = self.prompt.format(**fill_prompt_kwargs)
-        if self.system is not None:
-            self.system = self.system.format(**fill_prompt_kwargs)
-        if self.messages is not None:
-            self.messages = [
+        prompt = self.prompt
+        system = self.system
+        messages = self.messages
+
+        if prompt is not None:
+            prompt = prompt.format(**fill_prompt_kwargs)
+        if system is not None:
+            system = system.format(**fill_prompt_kwargs)
+        if messages is not None:
+            messages = [
                 {
                     "role": m["role"],
                     "content": m["content"].format(**fill_prompt_kwargs),
                 }
-                for m in self.messages
+                for m in messages
             ]
 
         return self.type(
-            prompt=self.prompt,
-            messages=self.messages,
-            system=self.system,
+            prompt=prompt,
+            messages=messages,
+            system=system,
             enable_cache=self.enable_cache,
             cache_dir=self.cache_dir,
             **self.kwargs,

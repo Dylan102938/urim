@@ -345,8 +345,8 @@ class Dataset:
         num_questions = len(questions)
         results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
 
+        read_thread_pool = ThreadPoolExecutor(max_workers=40)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            read_thread_pool = ThreadPoolExecutor(max_workers=40)
             future_to_index = {
                 executor.submit(
                     question.resolve,
