@@ -4,7 +4,7 @@ import seaborn as sns  # type: ignore
 import typer
 from matplotlib import pyplot as plt
 
-from urim.plots import (
+from urim.plot import (
     concat_datasets,
     infer_categorical_kwargs,
     infer_distribution_kwargs,
