@@ -4,6 +4,7 @@ import typer
 
 from urim.ai.question import _DEFAULT_CACHE
 from urim.cli.dataset import dataset_app
+from urim.cli.plot import plot_app
 from urim.version import __version__
 
 app = typer.Typer(
@@ -26,3 +27,4 @@ def version() -> None:
 
 # Subcommands
 app.add_typer(dataset_app, name="dataset")
+app.add_typer(plot_app, name="plot")
