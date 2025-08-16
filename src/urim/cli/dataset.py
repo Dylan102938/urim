@@ -565,8 +565,11 @@ def generate(
     ds = ctx_obj.dataset
     question_kwargs: dict[str, Any] = parse_kv(kwargs or [])
 
-    if system_prompt and Path(system_prompt).exists():
-        system_prompt = Path(system_prompt).read_text()
+    try:
+        if system_prompt and Path(system_prompt).exists():
+            system_prompt = Path(system_prompt).read_text()
+    except OSError:
+        pass
 
     judge_dict = parse_kv(judges or [])
     for k, template in judge_dict.items():

@@ -48,7 +48,9 @@ class LLM:
         if messages is None and not prompt:
             raise ValueError("Either messages or prompt must be provided")
 
-        final_messages = messages if messages is not None else _prompt_to_messages(prompt or "")
+        final_messages = (
+            messages if messages is not None else _prompt_to_messages(prompt or "")
+        )
         return self._request(
             model=model,
             messages=final_messages,
@@ -159,7 +161,7 @@ def _test_client(client: openai.Client, model: str) -> bool:
             "messages": [{"role": "user", "content": "Hi"}],
             "timeout": 5,
         }
-        if not model.startswith("o"):
+        if not model.startswith("o") and not model.startswith("gpt-5"):
             kwargs["max_tokens"] = 1
 
         openai_chat_completion(client, **kwargs)

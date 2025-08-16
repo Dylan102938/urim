@@ -138,7 +138,7 @@ class Question(ABC, Generic[EvalType]):
         return fresh
 
     @abstractmethod
-    def fetch(self, model: str, **kwargs) -> QuestionResult[EvalType]:
+    def fetch(self, model: str) -> QuestionResult[EvalType]:
         """Ignores cache and always fetches a fresh response from LLM"""
         ...
 
