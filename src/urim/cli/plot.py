@@ -25,8 +25,8 @@ Hue = typer.Option(
 Output = typer.Option(None, "-o", "--output", help="Output file or directory.")
 Multiple = typer.Option("stack", "--multiple", help="How to handle multiple groups.")
 Palette = typer.Option("deep", "--palette", help="Color palette.")
-ErrorBar = typer.Option("pi", "--error", help="Error bar type.")
-ErrorBarConfidence = typer.Option(95, "--error-ci", help="Error bar confidence.")
+ErrorBar = typer.Option("ci", "--error", help="Error bar type.")
+ErrorBarConfidence = typer.Option(95, "--error-conf", help="Error bar confidence.")
 
 
 def _out_results(output: Path | None) -> None:
@@ -59,7 +59,7 @@ def hist(
         **kwargs,  # type: ignore
         multiple=multiple,  # type: ignore
         bins=bins if bins is not None else "auto",
-        palette=palette,
+        palette=palette if "hue" in kwargs and kwargs["hue"] is not None else None,
     )
 
     _out_results(output)
@@ -90,6 +90,8 @@ def bar(
         **kwargs,  # type: ignore
         kind="bar",
         errorbar=None if error is None else (error, error_conf),
+        err_kws={"linewidth": 0.75},
+        capsize=0.15,
         palette=palette,
     )
 
@@ -124,6 +126,8 @@ def line(
         kind="line",
         palette=palette,
         errorbar=None if error is None else (error, error_conf),
+        err_kws={"linewidth": 0.75},
+        capsize=0.15,
         markers=True,
     )
 

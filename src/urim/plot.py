@@ -57,7 +57,7 @@ def get_categorical_columns(ds: Dataset) -> list[str]:
     for col in df.columns:
         series = df[col]
         nunique = int(series.nunique(dropna=True))
-        threshold = max(2, min(50, int(len(series) * 0.05)))
+        threshold = max(10, min(50, len(series) * 0.05))
         if 2 <= nunique <= threshold:
             candidate_cats.append((col, nunique))
 
@@ -99,7 +99,7 @@ def infer_distribution_kwargs(
 
     kwargs = {
         "x": data_cols[0],
-        "hue": cat_cols[-1] if len(cat_cols) > 0 else cat_cols[-1],
+        "hue": cat_cols[-1] if len(cat_cols) > 0 else None,
         "col": cat_cols[-2] if len(cat_cols) > 1 else None,
     }
 
@@ -133,11 +133,16 @@ def infer_categorical_kwargs(
     cat_cols = _reorder_columns(categorical_columns, [column, hue, x])
     data_cols = _reorder_columns(data_columns, [y])
 
-    cat_cols, data_cols = _segment_columns(cat_cols[:3], data_cols)
+    data_cols, cat_cols = _segment_columns(data_cols[:1], cat_cols)
+    cat_cols = cat_cols[:3]
 
     kwargs = {
-        "x": cat_cols[-1],
-        "hue": cat_cols[-2] if len(cat_cols) >= 2 else cat_cols[-1],
+        "x": cat_cols[-1] if len(cat_cols) > 0 else None,
+        "hue": (
+            cat_cols[-2]
+            if len(cat_cols) >= 2
+            else cat_cols[-1] if len(cat_cols) > 0 else None
+        ),
         "col": cat_cols[-3] if len(cat_cols) >= 3 else None,
         "y": data_cols[0] if len(data_cols) > 0 else None,
     }
