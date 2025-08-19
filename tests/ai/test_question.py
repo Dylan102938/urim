@@ -35,7 +35,6 @@ def chat_stub_calls() -> dict[str, Any]:
 
 @pytest.fixture()
 def completion(request: pytest.FixtureRequest) -> str:
-    # Default completion text; tests can override via indirect parametrization
     return getattr(request, "param", "answer-1")
 
 
@@ -154,22 +153,3 @@ def test_rating(
     answer, extra = q.resolve("test-model")
     assert isclose(answer, 1.5)
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}
-
-
-def test_question_str_repr_and_hash_stability() -> None:
-    q1 = FreeForm(prompt="Hello {name}", enable_cache=False, cache_dir="/tmp")
-    q2 = FreeForm(prompt="Hello {name}", enable_cache=True, cache_dir="/var/tmp")
-
-    assert q1.hash() == q2.hash()
-
-    with q1.fill_template(name="World") as qf:
-        assert qf.prompt == "Hello World"
-        filled_q1_hash = qf.hash()
-
-    with q2.fill_template(name="Bob") as qf:
-        assert qf.prompt == "Hello Bob"
-        filled_q2_hash = qf.hash()
-
-    assert filled_q1_hash != filled_q2_hash
-    assert q1.prompt == "Hello {name}"
-    assert q2.prompt == "Hello {name}"

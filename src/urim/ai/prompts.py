@@ -86,12 +86,17 @@ DATASET_CONCAT_NO_HINT_PROMPT = (
     " `pd.concat`. For your response, please output one JSON that contains a mapping"
     " for renaming columns from both `df1` and `df2` such that the concatenation makes"
     " the most sense. The keys that contain `df1` column names should be prepended with"
-    " `df1_`, and similarly prepend `df2_` for `df2` columns. Keep the following goals"
-    " in mind:\n1) When you have the option of either renaming a column from `df1` or"
-    " `df2`, elect to rename columns from `df2`.\n2) You do not need to ensure that the"
-    " column names are completely identical across the two datasets, as this will"
-    " sometimes be unrealistic. You should try to minimize the number of columns that"
-    " need to be renamed, but merge as many columns as possible that seem to have"
+    " `df1_`, and similarly prepend `df2_` for `df2` columns.\n\nHere's an"
+    " example:\nSay the user wants to concatenate a dataframe with the following"
+    " columns: a, b with another dataframe with the following columns: d, e, f. The"
+    " user wants to achieve the following goal: a should be concatenated with d, f"
+    " should be concatenated with b. Your response should be the following"
+    ' JSON:\n{{\n  "df2_d": "a",\n  "df2_f": "b"\n}}.\n\nKeep the following'
+    " goals in mind:\n1) When you have the option of either renaming a column from"
+    " `df1` or `df2`, elect to rename columns from `df2`.\n2) You do not need to ensure"
+    " that the column names are completely identical across the two datasets, as this"
+    " will sometimes be unrealistic. You should try to minimize the number of columns"
+    " that need to be renamed, but merge as many columns as possible that seem to have"
     " reasonably similar semantic purpose or structure."
 )
 DATASET_CONCAT_HINT_PROMPT = (
@@ -103,12 +108,17 @@ DATASET_CONCAT_HINT_PROMPT = (
     " `pd.concat`. For your response, please output one JSON that contains a mapping"
     " for renaming columns from both `df1` and `df2` such that the concatenation makes"
     " the most sense. The keys that contain `df1` column names should be prepended with"
-    " `df1_`, and similarly prepend `df2_` for `df2` columns. Keep the following goals"
-    " in mind:\n1) When you have the option of either renaming a column from `df1` or"
-    " `df2`, elect to rename columns from `df2`.\n2) You do not need to ensure that the"
-    " column names are completely identical across the two datasets, as this will"
-    " sometimes be unrealistic. Instead, you should rename enough columns such that you"
-    " achieve the following goal: {scheme}"
+    " `df1_`, and similarly prepend `df2_` for `df2` columns.\n\nHere's an"
+    " example:\nSay the user wants to concatenate a dataframe with the following"
+    " columns: a, b with another dataframe with the following columns: d, e, f. The"
+    " user wants to achieve the following goal: a should be concatenated with d, f"
+    " should be concatenated with b. Your response should be the following"
+    ' JSON:\n{{\n  "df2_d": "a",\n  "df2_f": "b"\n}}.\n\nKeep the following'
+    " goals in mind:\n1) When you have the option of either renaming a column from"
+    " `df1` or `df2`, elect to rename columns from `df2`.\n2) You do not need to ensure"
+    " that the column names are completely identical across the two datasets, as this"
+    " will sometimes be unrealistic. Instead, you should rename enough columns such"
+    " that you achieve the following goal: {scheme}"
 )
 GENERATE_DESCRIBE_CHAIN_PROMPT = """\
 I have a dataset with the following columns: {columns}. Additionally, here is the head output from the dataset:

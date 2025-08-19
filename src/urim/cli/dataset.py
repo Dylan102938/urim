@@ -123,13 +123,12 @@ def setup_local_dataset(
                 "No dataset loaded, either set a working dataset or pass in a"
                 " dataset name via -n."
             )
+            _, ds = Dataset.load_from_id(working_ds_id)
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
             if ctx.invoked_subcommand is None:
                 ctx.invoke(status, ctx, fast=False)
             return
-
-        _, ds = Dataset.load_from_id(working_ds_id)
     else:
         parsed_kwargs = parse_kv(kwargs or [])
         working_ds_id, ds = Dataset.load(

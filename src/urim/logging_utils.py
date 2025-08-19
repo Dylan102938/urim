@@ -204,14 +204,10 @@ class RichLogger:
         graph = graph or UrimDatasetGraph.from_file()
 
         wd = graph.working_dataset
-        assert (
-            wd is not None
-        ), "No working dataset is set. Run with -n first to load a new dataset."
-
         cls.decorated_print(
             first_emoji=":star:",
             subject="Working Dataset",
-            body=wd,
+            body=str(wd),
             subject_color=Colors.INFO,
         )
 

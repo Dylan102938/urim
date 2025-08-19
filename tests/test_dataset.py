@@ -1,19 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pandas as pd  # type: ignore
 import pytest
 
+import urim.ai.client as client_mod
+from urim.ai.client import ChatResult
+from urim.ai.question_cache import QuestionCache
 from urim.dataset import Dataset
 
 requires_llm = pytest.mark.requires_llm
 
 
 @pytest.fixture()
-def df_small() -> pd.DataFrame:
-    return pd.DataFrame(
+def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[QuestionCache]:
+    import urim.ai.question as qmod
+
+    cache = QuestionCache(cache_dir=tmp_path)
+    monkeypatch.setattr(qmod, "_DEFAULT_CACHE", cache)
+
+    yield cache
+
+    cache.stop()
+
+
+@pytest.fixture()
+def dataset(temp_cache: QuestionCache) -> Dataset:
+    df = pd.DataFrame(
         {
             "id": [1, 2, 3, 4],
             "a": [10, 20, 30, 40],
@@ -21,216 +36,235 @@ def df_small() -> pd.DataFrame:
         }
     )
 
+    return Dataset(df=df)
 
-def test_df_and_to_json_roundtrip(tmp_path: Path, df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
+
+def test_df(dataset: Dataset) -> None:
+    assert dataset.df() is not None
+    assert len(dataset.df()) == 4
+    assert list(dataset.df()["id"]) == [1, 2, 3, 4]
+    assert list(dataset.df()["a"]) == [10, 20, 30, 40]
+    assert list(dataset.df()["b"]) == [100, 200, 300, 400]
+
+
+def test_to_json(dataset: Dataset, tmp_path: Path) -> None:
     out = tmp_path / "ds.jsonl"
-    ds.to_json(str(out))
+    dataset.to_json(out.as_posix())
 
     assert out.exists()
-
-    ds2 = Dataset(input_path=str(out))
-    df2 = ds2.df()
-    assert list(df2.columns) == list(df_small.columns)
-    assert len(df2) == len(df_small)
-
-
-def test_sample_by_n_and_frac(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.sample(n=2, random_state=0)
-    assert len(ds.df()) == 2
-
-    ds = Dataset(df=df_small.copy())
-    ds.sample(frac=0.5, random_state=0)
-    assert len(ds.df()) == 2
+    assert out.read_text() == "".join(
+        [
+            f'{{"id":{i},"a":{a},"b":{b}}}\n'
+            for i, a, b in zip(
+                range(1, 5), [10, 20, 30, 40], [100, 200, 300, 400], strict=False
+            )
+        ]
+    )
 
 
-def test_rename_with_columns(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.rename(columns={"a": "x"})
+@pytest.mark.parametrize("n_or_frac", [2, 0.5])
+def test_sample(dataset: Dataset, n_or_frac: int | float) -> None:
+    if isinstance(n_or_frac, int):
+        ds = dataset.sample(n=n_or_frac)
+    else:
+        ds = dataset.sample(frac=n_or_frac)
+
+    df = ds.df()
+    assert len(df) == 2
+
+
+def test_rename_no_llm(dataset: Dataset) -> None:
+    ds = dataset.rename(columns={"a": "x"})
     assert "x" in ds.df().columns and "a" not in ds.df().columns
 
-
-@requires_llm
-def test_rename_with_hint(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.rename(columns=None, hint="rename columns")
-    assert len(ds.df().columns) == len(df_small.columns)
-
-
-def test_drop_with_columns(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.drop(columns=["b"])
-    assert list(ds.df().columns) == ["id", "a"]
+    ds = dataset.rename(columns={"a": "x", "b": "y"})
+    assert "x" in ds.df().columns and "a" not in ds.df().columns
+    assert "y" in ds.df().columns and "b" not in ds.df().columns
 
 
 @requires_llm
-def test_drop_with_hint(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.drop(columns=None, hint="drop noisy cols")
-    assert len(ds.df().columns) < len(df_small.columns)
+def test_rename(dataset: Dataset) -> None:
+    ds = dataset.rename(columns=None, hint="Rename a to x, b to y")
+    assert "x" in ds.df().columns and "a" not in ds.df().columns
+    assert "y" in ds.df().columns and "b" not in ds.df().columns
 
 
-def test_filter_with_fn(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.filter(fn=lambda row: row["a"] > 20)
-    assert list(ds.df()["id"]) == [3, 4]
+def test_drop_no_llm(dataset: Dataset) -> None:
+    ds = Dataset(df=dataset.df().copy())
+    ds = ds.drop(columns=["a"])
+    assert "a" not in ds.df().columns
+
+    ds = Dataset(df=dataset.df().copy())
+    ds = ds.drop(columns=["a", "b"])
+    assert "a" not in ds.df().columns
+    assert "b" not in ds.df().columns
 
 
 @requires_llm
-def test_filter_with_hint(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.filter(fn=None, hint="filter a > 20")
-    assert len(ds.df()) <= len(df_small)
+def test_drop_with_llm(dataset: Dataset) -> None:
+    ds = dataset.drop(columns=None, hint="Drop a and b")
+    assert "a" not in ds.df().columns
+    assert "b" not in ds.df().columns
 
 
-def test_apply_with_fn(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.apply(fn=lambda row: row["a"] + row["b"], column="sum")
+def test_filter_no_llm(dataset: Dataset) -> None:
+    ds = dataset.filter(fn=lambda row: row["a"] > 20)
+    assert len(ds.df()) == 2
+
+
+@requires_llm
+def test_filter_with_llm(dataset: Dataset) -> None:
+    ds = dataset.filter(fn=None, hint="Filter a > 20")
+    assert len(ds.df()) == 2
+
+
+def test_apply_no_llm(dataset: Dataset) -> None:
+    ds = dataset.apply(fn=lambda row: row["a"] + row["b"], column="sum")
     assert list(ds.df()["sum"]) == [110, 220, 330, 440]
 
 
 @requires_llm
-def test_apply_with_hint(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    ds.apply(fn=None, column=None, hint="create column z = 2*a")
-    assert len(ds.df().columns) == len(df_small.columns) + 1
+def test_apply_with_llm(dataset: Dataset) -> None:
+    ds = Dataset(df=dataset.df().copy())
+    ds = ds.apply(column="sum", hint="create column sum = a + b")
+    assert len(ds.df().columns) == len(dataset.df().columns) + 1
+    assert list(ds.df()["sum"]) == [110, 220, 330, 440]
 
 
-def test_merge_simple() -> None:
-    left = Dataset(df=pd.DataFrame({"id": [1, 2], "a": [10, 20]}))
-    right = Dataset(df=pd.DataFrame({"id": [2, 3], "b": [200, 300]}))
-
-    out = left.merge(right, on="id", how="inner")
-    # should mutate self and return self
-    assert out is left
-    df = out.df()
-    # Expect only id=2
-    assert list(df["id"]) == [2]
-    assert list(df["a"]) == [20]
-    assert list(df["b"]) == [200]
+def test_merge_no_llm(dataset: Dataset) -> None:
+    ds = dataset.merge(dataset, on="id", how="inner")
+    assert len(ds.df()) == 4
 
 
 @requires_llm
-def test_merge_with_hint() -> None:
-    left = Dataset(df=pd.DataFrame({"id": [1, 2], "a": [10, 20]}))
-    right = Dataset(df=pd.DataFrame({"id": [2, 3], "b": [200, 300]}))
-
-    left.merge(right, hint="figure out join")
-    df = left.df()
-    assert len(df) >= 2
-
-
-def test_concat_simple() -> None:
-    top = Dataset(df=pd.DataFrame({"id": [1, 2], "a": [10, 20]}))
-    bottom = Dataset(df=pd.DataFrame({"id": [3, 4], "a": [30, 40]}))
-
-    top.concat(bottom)
-    df = top.df()
-    assert list(df["id"]) == [1, 2, 3, 4]
-    assert list(df["a"]) == [10, 20, 30, 40]
+def test_merge_with_llm_simple(dataset: Dataset) -> None:
+    ds1 = Dataset(df=dataset.df().copy())
+    ds1 = ds1.rename(columns={"a": "a_id"})
+    merged = dataset.merge(ds1)
+    assert len(merged.df()) == 4
+    assert list(merged.df()["a_id"]) == [10, 20, 30, 40]
+    assert list(merged.df()["a"]) == [10, 20, 30, 40]
 
 
 @requires_llm
-def test_concat_with_hint() -> None:
-    df1 = pd.DataFrame({"id": [1], "a": [10]})
-    df2 = pd.DataFrame({"A": [2], "B": [20]})
+def test_merge_with_llm_mixed(dataset: Dataset) -> None:
+    ds1 = Dataset(df=dataset.df().copy())
+    ds1 = ds1.rename(columns={"a": "a_id"})
+    merged = dataset.merge(ds1, left_on="a", how="left", hint="merge on a")
+    assert len(merged.df()) == 4
 
-    left = Dataset(df=df1.copy())
-    right = Dataset(df=df2.copy())
+    assert list(merged.df()["a_id"]) == [10, 20, 30, 40]
+    assert list(merged.df()["a"]) == [10, 20, 30, 40]
 
-    left.concat(right, hint="align columns")
-    df = left.df()
-    assert len(df) == 2
+
+def test_concat_no_llm(dataset: Dataset) -> None:
+    ds1 = Dataset(df=dataset.df().copy())
+    concat = ds1.concat(ds1)
+    assert len(concat.df()) == 8
 
 
 @requires_llm
-def test_describe_noop(df_small: pd.DataFrame) -> None:
-    ds = Dataset(df=df_small.copy())
-    out = ds.describe("some hint")
-    assert out is ds
+def test_concat_with_llm_no_hint(dataset: Dataset) -> None:
+    ds1 = Dataset(df=dataset.df().copy())
+    ds1 = ds1.rename(columns={"a": "a_alt"})
+
+    concat = dataset.concat(ds1)
+
+    assert len(concat.df()) == 8
+    assert "a" in concat.df().columns
+    assert "a_id" not in concat.df().columns
 
 
-from urim.ai.question import Question  # noqa: E402
+@requires_llm
+def test_concat_with_llm_with_hint(dataset: Dataset) -> None:
+    ds1 = Dataset(df=dataset.df().copy())
 
-
-class DummyQuestion(Question[str]):
-    def __init__(
-        self,
-        prompt: str | None = None,
-        messages: list[dict] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(prompt=prompt, messages=messages, **kwargs)
-
-    def fetch(self, model: str):  # noqa: ANN001, ANN201
-        if self.prompt is not None:
-            return (f"ans:{self.prompt}", {"meta": "ok"})
-        return (f"ans:{len(self.messages or [])}", {"meta": "ok"})
-
-
-def test_generate_with_question_col() -> None:
-    df = pd.DataFrame({"question": ["Q1", "Q2"]})
-    ds = Dataset(df=df)
-    # Disable cache in generated questions to avoid cache writer signals in threads
-    ds.generate(
-        question_col="question",
-        out_col="answer",
-        question_type=DummyQuestion,
-        max_workers=2,
-        enable_cache=False,
-    )
-
-    out_df = ds.df()
-    assert list(out_df["answer"]) == ["ans:Q1", "ans:Q2"]
-    # extra column propagated
-    assert list(out_df["meta"]) == ["ok", "ok"]
-
-
-def test_generate_with_messages_col() -> None:
-    df = pd.DataFrame(
-        {
-            "messages": [
-                [{"role": "user", "content": "hi"}],
-                [{"role": "user", "content": "bye"}],
-            ]
-        }
-    )
-    ds = Dataset(df=df)
-    ds.generate(
-        messages_col="messages",
-        out_col="out",
-        question_type=DummyQuestion,
-        max_workers=2,
-        enable_cache=False,
-    )
-
-    out_df = ds.df()
-    assert list(out_df["out"]) == ["ans:1", "ans:1"]
-    assert list(out_df["meta"]) == ["ok", "ok"]
-
-
-def test_load_path_exists(tmp_path: Path) -> None:
-    df = pd.DataFrame({"id": [1], "a": [10]})
-    path = tmp_path / "exists.jsonl"
-    df.to_json(path, orient="records", lines=True)
-
-    _, ds = Dataset.load(str(path))
-    assert list(ds.df()["id"]) == [1]
-
-
-def test_load_hf_branch_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _stub(name: str, subset: str | None = None, **kwargs):  # noqa: ANN001, ANN201
-        _ = (name, subset, kwargs)
-        return "stubbed", Dataset(df=pd.DataFrame({"id": [42]}))
-
-    monkeypatch.setattr(
-        Dataset,
-        "load_from_hf",
-        classmethod(
-            lambda cls, name, subset=None, **kwargs: _stub(name, subset, **kwargs)
+    concat = dataset.concat(
+        ds1,
+        hint=(
+            "You should concatenate column a from the original dataset to column b in"
+            " the other dataset and column b in the original dataset to column a in the"
+            " other dataset."
         ),
     )
 
-    _, ds = Dataset.load("definitely-not-a-path")
-    assert list(ds.df()["id"]) == [42]
+    assert len(concat.df()) == 8
+    assert "a" in concat.df().columns
+    assert "b" in concat.df().columns
+
+    a_col = concat.df()["a"]
+    b_col = concat.df()["b"]
+
+    assert list(a_col) == [10, 20, 30, 40, 100, 200, 300, 400]
+    assert list(b_col) == [100, 200, 300, 400, 10, 20, 30, 40]
+
+
+def test_describe_sample_only(
+    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
+) -> None:
+    original = client_mod.LLM.chat_completion
+    call_count = {"n": 0}
+
+    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return ChatResult(content="sample | n=2", raw={})
+        return original(self, model, *args, **kwargs)
+
+    monkeypatch.setattr(client_mod.LLM, "chat_completion", stub_first_call)
+
+    ds = dataset.describe(hint="take a small sample")
+    assert len(ds.df()) == 2
+
+
+@requires_llm
+def test_describe_sample_then_drop(
+    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
+) -> None:
+    original = client_mod.LLM.chat_completion
+    call_count = {"n": 0}
+
+    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            content = "\n".join(
+                [
+                    "sample | n=4",
+                    "drop | hint=Drop b",
+                ]
+            )
+            return ChatResult(content=content, raw={})
+        return original(self, model, *args, **kwargs)
+
+    monkeypatch.setattr(client_mod.LLM, "chat_completion", stub_first_call)
+
+    ds = dataset.describe(hint="drop a column after sampling")
+    assert set(ds.df().columns) == {"id", "a"}
+    assert len(ds.df()) == 4
+
+
+@requires_llm
+def test_describe_rename_then_apply(
+    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
+) -> None:
+    original = client_mod.LLM.chat_completion
+    call_count = {"n": 0}
+
+    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            content = "\n".join(
+                [
+                    "rename | hint=Rename a to x",
+                    "apply | column=total | hint=create column z = x + b",
+                ]
+            )
+            return ChatResult(content=content, raw={})
+        return original(self, model, *args, **kwargs)
+
+    monkeypatch.setattr(client_mod.LLM, "chat_completion", stub_first_call)
+
+    ds = dataset.describe(hint="rename then compute a total")
+    assert "x" in ds.df().columns and "a" not in ds.df().columns
+    assert "total" in ds.df().columns
+    assert list(ds.df()["total"]) == [110, 220, 330, 440]

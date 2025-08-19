@@ -181,7 +181,7 @@ class Dataset:
         on: str | list[str] | None = None,
         left_on: str | list[str] | None = None,
         right_on: str | list[str] | None = None,
-        how: Literal["left", "right", "inner", "outer", "cross"] | None = None,
+        how: Literal["left", "right", "inner", "outer", "cross"] = "left",
         hint: str | None = None,
         model: str = "gpt-4.1",
         **kwargs,
@@ -194,21 +194,16 @@ class Dataset:
             "right_on": right_on,
             "how": how,
         }
+
+        merge_hint = ""
         if hint is not None:
-            merge_hint = ""
-            if hint is not None:
-                merge_hint += hint
-            if ons_none:
-                if merge_hint:
-                    merge_hint += " "
-
-                defined_args = [
-                    f"{k}={v}" for k, v in merge_args.items() if v is not None
-                ]
-                merge_hint += (
-                    f"I've already set the following args: {', '.join(defined_args)}"
-                )
-
+            merge_hint += hint
+        if not ons_none and merge_hint:
+            defined_args = [f"{k}={v}" for k, v in merge_args.items() if v is not None]
+            merge_hint += (
+                f"\n\nI've already set the following args: {', '.join(defined_args)}"
+            )
+        if merge_hint:
             merge_template = (
                 DATASET_MERGE_NO_HINT_PROMPT
                 if hint is None
@@ -230,8 +225,6 @@ class Dataset:
             left_on = json.get("left_on")
             right_on = json.get("right_on")
             how = json.get("how", "left")
-
-        assert how is not None
 
         self._df = df.merge(
             other_df,
