@@ -33,7 +33,7 @@ def with_cache(
     entries: Iterable[tuple[Question, str, Any]] | None = None,
     *,
     page_size: int = 10000,
-):
+) -> Any:
     return pytest.mark.parametrize(
         "cache",
         [{"entries": list(entries or []), "page_size": page_size}],

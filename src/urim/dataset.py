@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import pandas as pd  # type: ignore
-from datasets import Dataset as HFDataset  # type: ignore
+import pandas as pd
+from datasets import Dataset as HFDataset
 from datasets import load_dataset
 from typing_extensions import Self
 
@@ -31,7 +31,7 @@ Axis = int | Literal["index", "columns", "rows"]
 Renamer = Mapping[Any, Hashable]
 
 
-def get_hf_dataset_local_id(**kwargs) -> str:
+def get_hf_dataset_local_id(**kwargs: Any) -> str:
     sorted_keys = sorted(kwargs.keys())
     semantic_id = "_".join(f"{k}={kwargs[k]}" for k in sorted_keys)
     serialized_id = hashlib.sha256(semantic_id.encode()).hexdigest()
@@ -59,11 +59,13 @@ class Dataset:
 
         return self._df
 
-    def to_json(self, output_path: str):
+    def to_json(self, output_path: str) -> None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         self.df().to_json(output_path, orient="records", lines=True)
 
-    def sample(self, n: int | None = None, frac: float | None = None, **kwargs) -> Self:
+    def sample(
+        self, n: int | None = None, frac: float | None = None, **kwargs: Any
+    ) -> Self:
         assert n is not None or frac is not None, "Must provide either n or frac"
 
         self._df = self.df().sample(n=n, frac=frac, **kwargs)
@@ -153,6 +155,7 @@ class Dataset:
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
         df = self.df()
+        fn_callable: Callable[[pd.Series], Any]
         if fn is None:
             assert hint is not None, "Must provide a hint if no function is provided"
             question = ExtractFunction(
@@ -168,10 +171,15 @@ class Dataset:
                 )
             )
             wrapper_fn = question.fn(model)
-            column, fn = wrapper_fn()
+            gen_column, gen_fn = cast(
+                tuple[str, Callable[[pd.Series], Any]], wrapper_fn()
+            )
+            column, fn_callable = gen_column, gen_fn
+        else:
+            fn_callable = fn
 
         assert column is not None, "Must provide a column name"
-        df[column] = df.apply(fn, axis=1)  # type: ignore
+        df[column] = df.apply(fn_callable, axis=1)
 
         return self
 
@@ -184,7 +192,7 @@ class Dataset:
         how: Literal["left", "right", "inner", "outer", "cross"] = "left",
         hint: str | None = None,
         model: str = "gpt-4.1",
-        **kwargs,
+        **kwargs: Any,
     ) -> Self:
         df, other_df = self.df(), other.df()
         ons_none = on is None and left_on is None and right_on is None
@@ -301,7 +309,7 @@ class Dataset:
         question_type: type[Question] = FreeForm,
         model: str = "gpt-4.1",
         max_workers: int = 100,
-        **question_kwargs,
+        **question_kwargs: Any,
     ) -> Self:
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
@@ -397,7 +405,7 @@ class Dataset:
 
     @classmethod
     def load_from_hf(
-        cls, name: str, subset: str | None = None, **kwargs
+        cls, name: str, subset: str | None = None, **kwargs: Any
     ) -> tuple[str, Self]:
         ds_id = get_hf_dataset_local_id(name=name, subset=subset, **kwargs)
         if not cls.is_valid_id(ds_id):
@@ -420,7 +428,7 @@ class Dataset:
         split: str = "train",
         num_proc: int | None = None,
         subset: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> tuple[str, Self]:
         path = Path(name)
         if cls.is_valid_id(name):

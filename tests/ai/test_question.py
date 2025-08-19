@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from math import isclose
 from typing import Any, cast
 
-import pandas as pd  # type: ignore
+import pandas as pd
 import pytest
 
 from urim.ai.client import ChatResult
@@ -17,7 +17,9 @@ def fn(x: pd.Series):
 
 
 @pytest.fixture()
-def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[QuestionCache]:
+def temp_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> Iterator[QuestionCache]:
     import urim.ai.question as qmod
 
     cache = QuestionCache(cache_dir=tmp_path)
@@ -45,12 +47,12 @@ def stub_chat_completion_default(
     completion: str,
 ) -> None:
     def _stub(
-        self,  # noqa: ANN001
+        self: Any,  # noqa: ANN001
         model: str,
         *,
-        messages=None,
-        prompt=None,
-        **kwargs,
+        messages: Any | None = None,
+        prompt: Any | None = None,
+        **kwargs: Any,
     ) -> ChatResult:
         chat_stub_calls["count"] += 1
         if kwargs.get("logprobs"):
@@ -138,7 +140,7 @@ def test_rating(
     temp_cache: QuestionCache,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _chat_stub_completion(self, model: str, **kwargs):
+    def _chat_stub_completion(self: Any, model: str, **kwargs: Any) -> ChatResult:
         return ChatResult(
             content="1",
             raw={"ok": True},

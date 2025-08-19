@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 import typer
 
 from urim.ai.question import QuestionFactory, Rating
@@ -469,7 +469,7 @@ def merge(
     ds = ctx_obj.dataset
     _, other_ds = Dataset.load(other)
 
-    valid_hows = {"left", "right", "inner", "outer", "cross"}  # type: ignore[assignment]
+    valid_hows = {"left", "right", "inner", "outer", "cross"}
     how_lower = how.lower() if how else None
     if how_lower is not None:
         assert how_lower in valid_hows, f"--how must be one of {sorted(valid_hows)}"

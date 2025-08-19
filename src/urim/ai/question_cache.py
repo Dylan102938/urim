@@ -181,7 +181,7 @@ class QuestionCache:
         self.stop()
 
     def set(
-        self, question: Question, model: str, result: Any, **fill_prompt_kwargs
+        self, question: Question, model: str, result: Any, **fill_prompt_kwargs: Any
     ) -> None:
         if self._q is None:
             self.start()
@@ -205,7 +205,7 @@ class QuestionCache:
         model: str,
         *,
         executor: ThreadPoolExecutor | None = None,
-        **fill_prompt_kwargs,
+        **fill_prompt_kwargs: Any,
     ) -> Any | None:
         qhash = question.hash(**fill_prompt_kwargs)
         pages = Page.list(self.cache_dir / model, max_rows=self.page_size)

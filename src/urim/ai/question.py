@@ -56,7 +56,7 @@ class QuestionFactory(BaseModel):
     cache_dir: str | None = None
     kwargs: dict[str, Any] = {}
 
-    def resolve(self, **fill_prompt_kwargs) -> Question:
+    def resolve(self, **fill_prompt_kwargs: Any) -> Question:
         prompt = self.prompt
         system = self.system
         messages = self.messages
@@ -92,8 +92,8 @@ class Question(ABC, Generic[EvalType]):
         system: str | None = None,
         enable_cache: bool = True,
         cache_dir: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         assert not prompt or not messages, "Cannot specify both prompt and messages"
 
         self.prompt = prompt
@@ -146,10 +146,10 @@ class Question(ABC, Generic[EvalType]):
 class FreeForm(Question[str]):
     def __init__(
         self,
-        *args,
+        *args: Any,
         judges: dict[str, tuple[QuestionFactory, str]] | None = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.judges = judges
 
@@ -187,8 +187,8 @@ class ExtractJSON(FreeForm):
         enable_cache: bool = True,
         cache_dir: str | None = None,
         use_json_system: bool = True,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
         super().__init__(
             prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
@@ -208,8 +208,8 @@ class ExtractFunction(FreeForm):
         enable_cache: bool = True,
         cache_dir: str | None = None,
         use_function_system: bool = True,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
         super().__init__(
             prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
@@ -239,13 +239,13 @@ class ExtractFunction(FreeForm):
 class Rating(Question[float]):
     def __init__(
         self,
-        *args,
+        *args: Any,
         min_rating: float | None = None,
         max_rating: float | None = None,
         refusal_threshold: float = 0.75,
         top_logprobs: int = 20,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
         self.min_rating = min_rating
         self.max_rating = max_rating

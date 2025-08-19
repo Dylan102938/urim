@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-import pandas as pd  # type: ignore
+import pandas as pd
 import pytest
 
 import urim.ai.client as client_mod
@@ -15,7 +16,9 @@ requires_llm = pytest.mark.requires_llm
 
 
 @pytest.fixture()
-def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[QuestionCache]:
+def temp_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> Iterator[QuestionCache]:
     import urim.ai.question as qmod
 
     cache = QuestionCache(cache_dir=tmp_path)
@@ -205,7 +208,7 @@ def test_describe_sample_only(
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 
-    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+    def stub_first_call(self: Any, model: str, *args: Any, **kwargs: Any) -> ChatResult:
         call_count["n"] += 1
         if call_count["n"] == 1:
             return ChatResult(content="sample | n=2", raw={})
@@ -224,7 +227,7 @@ def test_describe_sample_then_drop(
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 
-    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+    def stub_first_call(self: Any, model: str, *args: Any, **kwargs: Any) -> ChatResult:
         call_count["n"] += 1
         if call_count["n"] == 1:
             content = "\n".join(
@@ -250,7 +253,7 @@ def test_describe_rename_then_apply(
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 
-    def stub_first_call(self, model, *args, **kwargs):  # type: ignore[no-redef]
+    def stub_first_call(self: Any, model: str, *args: Any, **kwargs: Any) -> ChatResult:
         call_count["n"] += 1
         if call_count["n"] == 1:
             content = "\n".join(
