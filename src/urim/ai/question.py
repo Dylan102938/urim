@@ -16,6 +16,7 @@ from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
 from urim.ai.question_cache import QuestionCache
 from urim.env import URIM_HOME
+from urim.logging_utils import logger
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
 QuestionResult = tuple[EvalType, dict[str, Any]]
@@ -127,15 +128,18 @@ class Question(ABC, Generic[EvalType]):
         self, model: str, *, executor: ThreadPoolExecutor | None = None
     ) -> QuestionResult[EvalType]:
         if self.enable_cache:
-            cached = _DEFAULT_CACHE.read(self, model, executor=executor)
-            if cached is not None:
-                return cached
+            result = _DEFAULT_CACHE.read(self, model, executor=executor)
 
-        fresh = self.fetch(model)
-        if self.enable_cache:
-            _DEFAULT_CACHE.set(self, model, fresh)
+        if result is None:
+            result = self.fetch(model)
+            if self.enable_cache:
+                _DEFAULT_CACHE.set(self, model, result)
 
-        return fresh
+        logger.debug(
+            f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}"
+        )
+
+        return result
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:

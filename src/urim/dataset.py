@@ -25,7 +25,7 @@ from urim.ai.prompts import (
 )
 from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, Question
 from urim.env import URIM_HOME
-from urim.logging_utils import RichLogger
+from urim.logging_utils import logger
 
 Axis = int | Literal["index", "columns", "rows"]
 Renamer = Mapping[Any, Hashable]
@@ -357,7 +357,7 @@ class Dataset:
                 for idx, question in enumerate(questions)
             }
 
-            with RichLogger.progress_bar() as progress:
+            with logger.pbar() as progress:
                 task_id = progress.add_task("Generating…", total=num_questions)
                 for future in as_completed(future_to_index):
                     idx = future_to_index[future]
