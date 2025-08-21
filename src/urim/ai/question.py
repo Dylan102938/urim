@@ -24,7 +24,7 @@ EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
 QuestionResult = tuple[EvalType, dict[str, Any]]
 
 _make_cache_lock = threading.Lock()
-_caches: dict[str, Store] = {}
+_caches: dict[str, DiskStore] = {}
 
 
 def _to_hashable(value: Any) -> Any:
@@ -271,9 +271,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert completion.top_tokens is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"
