@@ -137,9 +137,7 @@ def test_rating(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("urim.ai.question.LLM.chat_completion", _chat_stub_completion)
 
-    q = Rating(
-        prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3
-    )
+    q = Rating(prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3)
     answer, extra = q.resolve("test-model")
     assert isclose(answer, 1.5)
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}

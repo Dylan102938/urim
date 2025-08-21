@@ -21,17 +21,12 @@ def _is_llm_enabled_from_config(config: pytest.Config) -> bool:
     return cli_flag or (env_flag == "1" or (env_flag or "").lower() == "true")
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     if _is_llm_enabled_from_config(config):
         return
 
     skip_marker = pytest.mark.skip(
-        reason=(
-            "requires_llm disabled. Enable with --requires-llm or"
-            " URIM_TEST_REQUIRES_LLM=1"
-        )
+        reason=("requires_llm disabled. Enable with --requires-llm or URIM_TEST_REQUIRES_LLM=1")
     )
     for item in items:
         if "requires_llm" in item.keywords:

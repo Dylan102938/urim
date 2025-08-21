@@ -35,10 +35,7 @@ def _to_hashable(value: Any) -> Any:
     if isinstance(value, QuestionFactory):
         return {"question_factory": value.model_dump()}
     if isinstance(value, dict):
-        return {
-            str(k): _to_hashable(v)
-            for k, v in sorted(value.items(), key=lambda x: str(x[0]))
-        }
+        return {str(k): _to_hashable(v) for k, v in sorted(value.items(), key=lambda x: str(x[0]))}
     if isinstance(value, list | tuple | set):
         return [_to_hashable(v) for v in value]
     if callable(value):
@@ -109,9 +106,7 @@ class Question(ABC, Generic[EvalType]):
 
     def __str__(self) -> str:
         wrapper = "{class_name}({insides})"
-        insides = ", ".join(
-            f"{k}={v}" for k, v in self.__dict__.items() if v is not None
-        )
+        insides = ", ".join(f"{k}={v}" for k, v in self.__dict__.items() if v is not None)
         return wrapper.format(class_name=self.__class__.__name__, insides=insides)
 
     def __repr__(self) -> str:
@@ -140,9 +135,7 @@ class Question(ABC, Generic[EvalType]):
             if self.enable_cache:
                 cache.put(self.hash(), result)
 
-        logger.debug(
-            f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}"
-        )
+        logger.debug(f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}")
 
         return result
 
@@ -209,9 +202,7 @@ class ExtractJSON(FreeForm):
         **kwargs: Any,
     ) -> None:
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
-        super().__init__(
-            prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
-        )
+        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def json(self, model: str) -> dict:
         result, _ = self.resolve(model)
@@ -230,9 +221,7 @@ class ExtractFunction(FreeForm):
         **kwargs: Any,
     ) -> None:
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
-        super().__init__(
-            prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
-        )
+        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def fn(self, model: str) -> Callable[..., Any]:
         result, _ = super().resolve(model)
@@ -282,9 +271,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert (
-            completion.top_tokens is not None
-        ), "Looks like your provider doesn't support logprobs"
+        assert completion.top_tokens is not None, (
+            "Looks like your provider doesn't support logprobs"
+        )
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"

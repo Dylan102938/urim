@@ -120,9 +120,9 @@ class RichLogger:
         column_names = list(columns.keys())
         assert len(column_names) > 0, "Must provide at least one column"
         n_rows = len(columns[column_names[0]])
-        assert all(
-            len(columns[name]) == n_rows for name in column_names
-        ), "All columns must have the same number of rows"
+        assert all(len(columns[name]) == n_rows for name in column_names), (
+            "All columns must have the same number of rows"
+        )
 
         table = Table(
             title=title,

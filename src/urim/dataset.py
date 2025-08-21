@@ -46,9 +46,7 @@ def get_dataset_local_id(path: Path) -> str:
 
 class Dataset:
     def __init__(self, input_path: str | None = None, df: pd.DataFrame | None = None):
-        assert (
-            input_path is not None or df is not None
-        ), "Must provide either a path or a DataFrame"
+        assert input_path is not None or df is not None, "Must provide either a path or a DataFrame"
         self.path = input_path
         self._df = df
 
@@ -63,9 +61,7 @@ class Dataset:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         self.df().to_json(output_path, orient="records", lines=True)
 
-    def sample(
-        self, n: int | None = None, frac: float | None = None, **kwargs: Any
-    ) -> Self:
+    def sample(self, n: int | None = None, frac: float | None = None, **kwargs: Any) -> Self:
         assert n is not None or frac is not None, "Must provide either n or frac"
 
         self._df = self.df().sample(n=n, frac=frac, **kwargs)
@@ -99,16 +95,12 @@ class Dataset:
         hint: str | None = None,
         model: str = "gpt-4.1-mini",
     ) -> Self:
-        assert (
-            columns is not None or hint is not None
-        ), "Must provide either columns or hint"
+        assert columns is not None or hint is not None, "Must provide either columns or hint"
 
         df = self.df()
         if columns is None:
             drop_prompt = (
-                DATASET_DROP_NO_HINT_PROMPT
-                if hint is None
-                else DATASET_DROP_WITH_HINT_PROMPT
+                DATASET_DROP_NO_HINT_PROMPT if hint is None else DATASET_DROP_WITH_HINT_PROMPT
             )
             question = ExtractJSON(
                 prompt=drop_prompt.format(
@@ -164,16 +156,12 @@ class Dataset:
                     head=df.head(5),
                     scheme=hint,
                     column_hint=(
-                        f"The column's name should be {column}."
-                        if column is not None
-                        else ""
+                        f"The column's name should be {column}." if column is not None else ""
                     ),
                 )
             )
             wrapper_fn = question.fn(model)
-            gen_column, gen_fn = cast(
-                tuple[str, Callable[[pd.Series], Any]], wrapper_fn()
-            )
+            gen_column, gen_fn = cast(tuple[str, Callable[[pd.Series], Any]], wrapper_fn())
             column, fn_callable = gen_column, gen_fn
         else:
             fn_callable = fn
@@ -208,14 +196,10 @@ class Dataset:
             merge_hint += hint
         if not ons_none and merge_hint:
             defined_args = [f"{k}={v}" for k, v in merge_args.items() if v is not None]
-            merge_hint += (
-                f"\n\nI've already set the following args: {', '.join(defined_args)}"
-            )
+            merge_hint += f"\n\nI've already set the following args: {', '.join(defined_args)}"
         if merge_hint:
             merge_template = (
-                DATASET_MERGE_NO_HINT_PROMPT
-                if hint is None
-                else DATASET_MERGE_HINT_PROMPT
+                DATASET_MERGE_NO_HINT_PROMPT if hint is None else DATASET_MERGE_HINT_PROMPT
             )
 
             question = ExtractJSON(
@@ -258,9 +242,7 @@ class Dataset:
 
         if len(col_diff) > 0 or hint is not None:
             concat_prompt = (
-                DATASET_CONCAT_NO_HINT_PROMPT
-                if hint is None
-                else DATASET_CONCAT_HINT_PROMPT
+                DATASET_CONCAT_NO_HINT_PROMPT if hint is None else DATASET_CONCAT_HINT_PROMPT
             )
             question = ExtractJSON(
                 prompt=concat_prompt.format(
@@ -330,9 +312,9 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert (
-                question_col in df
-            ), "Both question and messages columns are missing, need at least one"
+            assert question_col in df, (
+                "Both question and messages columns are missing, need at least one"
+            )
             questions = [
                 question_type(prompt=question, **question_kwargs)
                 for question in df[question_col].to_list()
@@ -404,15 +386,11 @@ class Dataset:
         return cls.load_from_id(ds_id)
 
     @classmethod
-    def load_from_hf(
-        cls, name: str, subset: str | None = None, **kwargs: Any
-    ) -> tuple[str, Self]:
+    def load_from_hf(cls, name: str, subset: str | None = None, **kwargs: Any) -> tuple[str, Self]:
         ds_id = get_hf_dataset_local_id(name=name, subset=subset, **kwargs)
         if not cls.is_valid_id(ds_id):
             ds = cast(HFDataset, load_dataset(name, subset, **kwargs))
-            ds.to_json(
-                URIM_HOME / "datasets" / f"{ds_id}.jsonl", orient="records", lines=True
-            )
+            ds.to_json(URIM_HOME / "datasets" / f"{ds_id}.jsonl", orient="records", lines=True)
 
         assert cls.is_valid_id(ds_id)
         return cls.load_from_id(ds_id)
