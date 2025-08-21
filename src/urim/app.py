@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import typer
 
-from urim.ai.question import _DEFAULT_CACHE
 from urim.cli.dataset import dataset_app
 from urim.version import __version__
 
@@ -11,11 +10,6 @@ app = typer.Typer(
     add_completion=False,
     help="Urim: CLI utilities for LLM research.",
 )
-
-
-@app.callback()
-def _setup_cache() -> None:
-    _DEFAULT_CACHE.start()
 
 
 @app.command()
