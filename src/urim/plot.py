@@ -6,9 +6,7 @@ from urim.dataset import Dataset
 
 
 def _serialize_kwargs(kwargs: Mapping[str, str | None]) -> str:
-    return ", ".join(
-        f"{key}={value}" for key, value in kwargs.items() if value is not None
-    )
+    return ", ".join(f"{key}={value}" for key, value in kwargs.items() if value is not None)
 
 
 def _reorder_columns(guessed_order: list, actual_order: list) -> list:
@@ -22,9 +20,7 @@ def _reorder_columns(guessed_order: list, actual_order: list) -> list:
     return guessed_order
 
 
-def _segment_columns(
-    prioritized_columns: list, other_columns: list
-) -> tuple[list, list]:
+def _segment_columns(prioritized_columns: list, other_columns: list) -> tuple[list, list]:
     for item in reversed(prioritized_columns):
         if item in other_columns:
             other_columns.remove(item)
@@ -139,9 +135,7 @@ def infer_categorical_kwargs(
     kwargs = {
         "x": cat_cols[-1] if len(cat_cols) > 0 else None,
         "hue": (
-            cat_cols[-2]
-            if len(cat_cols) >= 2
-            else cat_cols[-1] if len(cat_cols) > 0 else None
+            cat_cols[-2] if len(cat_cols) >= 2 else cat_cols[-1] if len(cat_cols) > 0 else None
         ),
         "col": cat_cols[-3] if len(cat_cols) >= 3 else None,
         "y": data_cols[0] if len(data_cols) > 0 else None,
