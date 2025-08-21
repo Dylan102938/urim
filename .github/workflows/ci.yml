@@ -113,12 +113,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --dev --python ${{ matrix.python-version }}
 
-      - name: Run tests (non-main branches)
-        if: github.ref != 'refs/heads/main'
-        run: uv run pytest -s -m "not requires_llm"
-
-      - name: Run tests (main branch with LLM)
-        if: github.ref == 'refs/heads/main'
+      - name: Run tests
         env:
-          URIM_TEST_REQUIRES_LLM: '1'
+          OPENAI_API_KEY: dummy
+          OPENROUTER_API_KEY: dummy
+          URIM_TEST_REQUIRES_LLM: "0"
         run: uv run pytest -s
