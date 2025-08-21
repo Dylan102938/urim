@@ -30,6 +30,7 @@ dependencies = [
   "pandas>=2.0",
   "datasets>=2.19",
   "python-dotenv>=1.1.1",
+  "orjson>=3.11.2",
 ]
 
 [project.scripts]
