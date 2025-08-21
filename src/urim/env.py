@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
-from typing import Self
 
 from pydantic import BaseModel
+from typing_extensions import Self
 
 URIM_HOME = Path(os.environ.get("URIM_HOME", os.path.expanduser("~/.urim")))
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
