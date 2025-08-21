@@ -100,7 +100,7 @@ class RichLogger:
             BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
             console=self.console,
-            transient=False,
+            transient=True,
             refresh_per_second=12,
         )
         self._pbar_ctx = progress
@@ -212,7 +212,7 @@ class RichLogger:
         self.console.print(f)
 
 
-logger = RichLogger(level=logging.DEBUG)
+logger = RichLogger(level=logging.INFO)
 
 
 def setup_rich_logging(verbosity: int = 0) -> None:
