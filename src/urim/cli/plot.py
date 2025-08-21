@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import seaborn as sns  # type: ignore
+import seaborn as sns
 import typer
 from matplotlib import pyplot as plt
 
