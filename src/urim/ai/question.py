@@ -4,6 +4,7 @@ import ast
 import hashlib
 import inspect
 import json
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -14,14 +15,16 @@ from pydantic import BaseModel, Field
 
 from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
-from urim.ai.question_cache import QuestionCache
 from urim.env import URIM_HOME
 from urim.logging_utils import logger
+from urim.store.base import Store
+from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
 QuestionResult = tuple[EvalType, dict[str, Any]]
 
-_DEFAULT_CACHE = QuestionCache(cache_dir=URIM_HOME / "questions")
+_make_cache_lock = threading.Lock()
+_caches: dict[str, Store] = {}
 
 
 def _to_hashable(value: Any) -> Any:
@@ -127,19 +130,31 @@ class Question(ABC, Generic[EvalType]):
     def resolve(
         self, model: str, *, executor: ThreadPoolExecutor | None = None
     ) -> QuestionResult[EvalType]:
+        result: QuestionResult[EvalType] | None = None
         if self.enable_cache:
-            result = _DEFAULT_CACHE.read(self, model, executor=executor)
+            cache = self.get_model_cache(model)
+            result = cache.get(self.hash())
 
         if result is None:
             result = self.fetch(model)
             if self.enable_cache:
-                _DEFAULT_CACHE.set(self, model, result)
+                cache.put(self.hash(), result)
 
         logger.debug(
             f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}"
         )
 
         return result
+
+    def get_model_cache(self, model: str) -> Store:
+        with _make_cache_lock:
+            if model not in _caches:
+                logger.info(f"Creating cache for model: {model}")
+                _caches[model] = DiskStore(
+                    Path(self.cache_dir) / model,
+                )
+
+            return _caches[model]
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:
