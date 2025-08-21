@@ -35,7 +35,7 @@ def with_mem_store(**kwargs: Any) -> Any:
 @with_mem_store(preload=[("a", 1)])
 def test_get_hit(mem_store: MemoryStore) -> None:
     assert mem_store.get("a") == 1
-    assert "a" in mem_store._working_page["key"]
+    assert mem_store._working_page.get("a") == 1
 
 
 @with_mem_store()
@@ -55,7 +55,7 @@ def test_page_rotation(mem_store: MemoryStore) -> None:
     print(mem_store._working_page)
 
     assert mem_store._page_queue[0][1]["key"].tolist() == ["a", "b"]
-    assert mem_store._working_page["key"] == ["c"]
+    assert mem_store._working_page.get("c") == 3
 
 
 @with_mem_store(capacity=1, preload=[("a", 1), ("b", 2), ("c", 3), ("d", 4)])
@@ -67,4 +67,4 @@ def test_page_eviction(mem_store: MemoryStore) -> None:
 
     assert len(mem_store._page_queue) == 1
     assert mem_store._page_queue[0][1]["key"].tolist() == ["c", "d"]
-    assert mem_store._working_page["key"] == ["e"]
+    assert mem_store._working_page.get("e") == 5

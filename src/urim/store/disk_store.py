@@ -93,9 +93,9 @@ class DiskStore(Store):
         self._lru = MemoryStore(lru_capacity, page_size)
         self._pid_to_disk_idx: dict[int, int] = {}
         self._lock = threading.RLock()
+        self._wp = _WorkingPage(base_dir, self._max_page_idx(), page_size)
 
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._wp = _WorkingPage(base_dir, self._max_page_idx(), page_size)
 
     def full(self) -> bool:
         pages = self._list_pages()
