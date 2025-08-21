@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -9,26 +8,28 @@ import pytest
 
 import urim.ai.client as client_mod
 from urim.ai.client import ChatResult
-from urim.ai.question_cache import QuestionCache
 from urim.dataset import Dataset
 
 requires_llm = pytest.mark.requires_llm
 
 
-@pytest.fixture()
-def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[QuestionCache]:
+@pytest.fixture(autouse=True)
+def force_question_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     import urim.ai.question as qmod
 
-    cache = QuestionCache(cache_dir=tmp_path)
-    monkeypatch.setattr(qmod, "_DEFAULT_CACHE", cache)
+    qmod._caches.clear()
 
-    yield cache
+    original_init = qmod.Question.__init__
 
-    cache.stop()
+    def _init(self: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        original_init(self, *args, **kwargs)
+        self.cache_dir = str(tmp_path)
+
+    monkeypatch.setattr(qmod.Question, "__init__", _init, raising=True)
 
 
 @pytest.fixture()
-def dataset(temp_cache: QuestionCache) -> Dataset:
+def dataset() -> Dataset:
     df = pd.DataFrame(
         {
             "id": [1, 2, 3, 4],
