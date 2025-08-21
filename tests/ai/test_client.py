@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.conftest import requires_llm
 
 from urim.ai.client import LLM, _collect_openai_keys
 
@@ -19,6 +20,7 @@ def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -
     assert keys == ["A", "B", "C"]
 
 
+@requires_llm
 def test_client_calls_openai() -> None:
     client = LLM()
     keys = _collect_openai_keys()
