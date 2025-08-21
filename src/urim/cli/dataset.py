@@ -20,9 +20,7 @@ dataset_app = typer.Typer(help="Dataset utilities: creation and inspection.")
 
 def get_ds_id(explicit_id: str | None = None) -> str:
     if explicit_id is not None:
-        assert not Path(
-            explicit_id
-        ).exists(), f"Dataset with id={explicit_id} already exists"
+        assert not Path(explicit_id).exists(), f"Dataset with id={explicit_id} already exists"
         return explicit_id
 
     for _ in range(5):
@@ -31,8 +29,7 @@ def get_ds_id(explicit_id: str | None = None) -> str:
             return id
 
     raise RuntimeError(
-        "Failed to find a unique dataset id. You may want to consider running urim"
-        " clean."
+        "Failed to find a unique dataset id. You may want to consider running urim clean."
     )
 
 
@@ -122,8 +119,7 @@ def setup_local_dataset(
         working_ds_id = graph.working_dataset
         if ctx.invoked_subcommand not in {None, "status"}:
             assert working_ds_id is not None, (
-                "No dataset loaded, either set a working dataset or pass in a"
-                " dataset name via -n."
+                "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
             )
             _, ds = Dataset.load_from_id(working_ds_id)
         else:
@@ -196,9 +192,7 @@ def history(ctx: typer.Context) -> None:
 @dataset_app.command()
 def goto(
     ctx: typer.Context,
-    id: str = typer.Argument(
-        ..., help="Dataset id or step index from root to navigate to."
-    ),
+    id: str = typer.Argument(..., help="Dataset id or step index from root to navigate to."),
 ) -> None:
     ctx_obj: DatasetContext = ctx.obj
 
@@ -292,9 +286,7 @@ def prune(
     else:
         ctx_obj.graph.prune_from_node(path_from_root[-1])
 
-    logger.success(
-        f"Pruned dataset(s). Set working dataset to {ctx_obj.graph.working_dataset}"
-    )
+    logger.success(f"Pruned dataset(s). Set working dataset to {ctx_obj.graph.working_dataset}")
 
 
 @dataset_app.command()
@@ -328,9 +320,7 @@ def print(
 @dataset_app.command()
 def sample(
     ctx: typer.Context,
-    n_or_frac: float = typer.Argument(
-        ..., help="Absolute number or fraction of rows to sample."
-    ),
+    n_or_frac: float = typer.Argument(..., help="Absolute number or fraction of rows to sample."),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -490,9 +480,7 @@ def merge(
     other: str = typer.Option(
         ..., "-b", "--other", help="Other dataset (HF id or local JSONL path)."
     ),
-    on: list[str] | None = typer.Option(
-        None, "--on", help="Column(s) to join on (repeatable)."
-    ),
+    on: list[str] | None = typer.Option(None, "--on", help="Column(s) to join on (repeatable)."),
     left_on: list[str] | None = typer.Option(
         None, "--left-on", help="Column(s) from left dataset to join on (repeatable)."
     ),
@@ -581,9 +569,7 @@ def generate(
     out_col: str | None = typer.Option(
         None, "-c", "--out-col", help="Name of output column to write answers to."
     ),
-    model: str = typer.Option(
-        "gpt-4.1", "-m", "--model", help="Model to use for generation."
-    ),
+    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
     max_workers: int = typer.Option(
         100, "--max-workers", help="Maximum concurrent workers for generation."
     ),
@@ -651,9 +637,7 @@ def describe(
     hint: str = typer.Option(
         ..., "-h", "--hint", help="Autogenerate describe args using this hint."
     ),
-    model: str = typer.Option(
-        "gpt-4.1", "-m", "--model", help="Model to use for generation."
-    ),
+    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
     out: Path | None = typer.Option(
         None,
         "-o",

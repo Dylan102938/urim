@@ -17,9 +17,7 @@ def fn(x: pd.Series):
 
 
 @pytest.fixture()
-def temp_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> Iterator[QuestionCache]:
+def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[QuestionCache]:
     import urim.ai.question as qmod
 
     cache = QuestionCache(cache_dir=tmp_path)
@@ -97,9 +95,7 @@ def test_freeform(
 
 
 @pytest.mark.parametrize("completion", ['{"foo": 1, "bar": "dummy"}'], indirect=True)
-def test_extract_json(
-    temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]
-) -> None:
+def test_extract_json(temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractJSON(prompt="Give me a dummy json")
     answer, extra = q.resolve("test-model")
     assert answer == '{"foo": 1, "bar": "dummy"}'
@@ -117,9 +113,7 @@ def test_extract_json(
 
 
 @pytest.mark.parametrize("completion", [DUMMY_FN], indirect=True)
-def test_extract_function(
-    temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]
-) -> None:
+def test_extract_function(temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractFunction(prompt="Write a function")
     code, extra = q.resolve("test-model")
     assert isinstance(code, str) and code.strip().startswith("def fn(")
@@ -149,9 +143,7 @@ def test_rating(
 
     monkeypatch.setattr("urim.ai.question.LLM.chat_completion", _chat_stub_completion)
 
-    q = Rating(
-        prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3
-    )
+    q = Rating(prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3)
     answer, extra = q.resolve("test-model")
     assert isclose(answer, 1.5)
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}

@@ -48,9 +48,7 @@ class LLM:
         if messages is None and not prompt:
             raise ValueError("Either messages or prompt must be provided")
 
-        final_messages = (
-            messages if messages is not None else _prompt_to_messages(prompt or "")
-        )
+        final_messages = messages if messages is not None else _prompt_to_messages(prompt or "")
         return self._request(
             model=model,
             messages=final_messages,
@@ -150,9 +148,7 @@ def _on_backoff(details: Any) -> None:
     factor=1.5,
     on_backoff=_on_backoff,
 )
-def openai_chat_completion(
-    client: openai.Client, *args: Any, **kwargs: Any
-) -> ChatCompletion:
+def openai_chat_completion(client: openai.Client, *args: Any, **kwargs: Any) -> ChatCompletion:
     return client.chat.completions.create(*args, **kwargs)
 
 

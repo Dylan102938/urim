@@ -172,8 +172,7 @@ Output = typer.Option(
     "--output",
     "-o",
     help=(
-        "Output file or directory. If directory, name is derived. Defaults to"
-        " $URIM_HOME/datasets"
+        "Output file or directory. If directory, name is derived. Defaults to $URIM_HOME/datasets"
     ),
     dir_okay=True,
     file_okay=True,

@@ -16,9 +16,7 @@ requires_llm = pytest.mark.requires_llm
 
 
 @pytest.fixture()
-def temp_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> Iterator[QuestionCache]:
+def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[QuestionCache]:
     import urim.ai.question as qmod
 
     cache = QuestionCache(cache_dir=tmp_path)
@@ -58,9 +56,7 @@ def test_to_json(dataset: Dataset, tmp_path: Path) -> None:
     assert out.read_text() == "".join(
         [
             f'{{"id":{i},"a":{a},"b":{b}}}\n'
-            for i, a, b in zip(
-                range(1, 5), [10, 20, 30, 40], [100, 200, 300, 400], strict=False
-            )
+            for i, a, b in zip(range(1, 5), [10, 20, 30, 40], [100, 200, 300, 400], strict=False)
         ]
     )
 
@@ -202,9 +198,7 @@ def test_concat_with_llm_with_hint(dataset: Dataset) -> None:
     assert list(b_col) == [100, 200, 300, 400, 10, 20, 30, 40]
 
 
-def test_describe_sample_only(
-    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
-) -> None:
+def test_describe_sample_only(monkeypatch: pytest.MonkeyPatch, dataset: Dataset) -> None:
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 
@@ -221,9 +215,7 @@ def test_describe_sample_only(
 
 
 @requires_llm
-def test_describe_sample_then_drop(
-    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
-) -> None:
+def test_describe_sample_then_drop(monkeypatch: pytest.MonkeyPatch, dataset: Dataset) -> None:
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 
@@ -247,9 +239,7 @@ def test_describe_sample_then_drop(
 
 
 @requires_llm
-def test_describe_rename_then_apply(
-    monkeypatch: pytest.MonkeyPatch, dataset: Dataset
-) -> None:
+def test_describe_rename_then_apply(monkeypatch: pytest.MonkeyPatch, dataset: Dataset) -> None:
     original = client_mod.LLM.chat_completion
     call_count = {"n": 0}
 

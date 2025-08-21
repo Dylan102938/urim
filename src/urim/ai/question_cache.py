@@ -120,9 +120,7 @@ def _write_loop(
 
         (cache_dir / model).mkdir(parents=True, exist_ok=True)
 
-        page = models_curr_pages.get(
-            model, Page.working_page(cache_dir / model, page_size)
-        )
+        page = models_curr_pages.get(model, Page.working_page(cache_dir / model, page_size))
         page = page.write(rows)
         pending[model] = []
         models_curr_pages[model] = page
@@ -180,9 +178,7 @@ class QuestionCache:
     def __del__(self) -> None:
         self.stop()
 
-    def set(
-        self, question: Question, model: str, result: Any, **fill_prompt_kwargs: Any
-    ) -> None:
+    def set(self, question: Question, model: str, result: Any, **fill_prompt_kwargs: Any) -> None:
         if self._q is None:
             self.start()
 
