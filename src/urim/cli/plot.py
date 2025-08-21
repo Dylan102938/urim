@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import seaborn as sns
 import typer
@@ -44,7 +45,7 @@ def hist(
     palette: str = Palette,
 ) -> None:
     concat_ds = concat_datasets(dataset_ids)
-    kwargs = infer_distribution_kwargs(
+    kwargs: Any = infer_distribution_kwargs(
         concat_ds,
         x=x,
         hue=hue,
@@ -52,8 +53,8 @@ def hist(
 
     sns.displot(
         concat_ds.df(),
-        **kwargs,  # type: ignore
-        multiple=multiple,  # type: ignore
+        **kwargs,
+        multiple=multiple,
         bins=bins if bins is not None else "auto",
         palette=palette if "hue" in kwargs and kwargs["hue"] is not None else None,
     )
@@ -73,7 +74,7 @@ def bar(
     error_conf: int = ErrorBarConfidence,
 ) -> None:
     concat_ds = concat_datasets(dataset_ids)
-    kwargs = infer_categorical_kwargs(
+    kwargs: Any = infer_categorical_kwargs(
         concat_ds,
         x=x,
         y=y,
@@ -83,7 +84,7 @@ def bar(
 
     sns.catplot(
         concat_ds.df(),
-        **kwargs,  # type: ignore
+        **kwargs,
         kind="bar",
         errorbar=None if error is None else (error, error_conf),
         err_kws={"linewidth": 0.75},
@@ -107,7 +108,7 @@ def line(
     error_conf: int = ErrorBarConfidence,
 ) -> None:
     concat_ds = concat_datasets(dataset_ids)
-    kwargs = infer_relational_kwargs(
+    kwargs: Any = infer_relational_kwargs(
         concat_ds,
         graph_type="line",
         x=x,
@@ -118,7 +119,7 @@ def line(
 
     sns.relplot(
         concat_ds.df(),
-        **kwargs,  # type: ignore
+        **kwargs,
         kind="line",
         palette=palette,
         errorbar=None if error is None else (error, error_conf),
@@ -141,7 +142,7 @@ def scatter(
     palette: str = Palette,
 ) -> None:
     concat_ds = concat_datasets(dataset_ids)
-    kwargs = infer_relational_kwargs(
+    kwargs: Any = infer_relational_kwargs(
         concat_ds,
         graph_type="scatter",
         x=x,
@@ -152,7 +153,7 @@ def scatter(
 
     sns.relplot(
         concat_ds.df(),
-        **kwargs,  # type: ignore
+        **kwargs,
         kind="scatter",
         palette=palette,
         markers=True,
