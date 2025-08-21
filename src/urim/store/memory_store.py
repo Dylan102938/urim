@@ -72,9 +72,7 @@ class MemoryStore(Store):
                 self._working_page.put(key, value)
             except AssertionError:
                 self.insert_page(pd.DataFrame(self._working_page._page))
-                self._working_page = _WorkingPage(
-                    self._working_page.idx + 1, self.page_size
-                )
+                self._working_page = _WorkingPage(self._working_page.idx + 1, self.page_size)
                 self._working_page.put(key, value)
 
     def insert_page(self, page: pd.DataFrame) -> tuple[list[int], list[int]]:

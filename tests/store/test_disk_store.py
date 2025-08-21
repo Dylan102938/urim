@@ -18,9 +18,7 @@ def _write(store: DiskStore, items: Iterable[tuple[str, Any]]) -> None:
 
 
 def reload_disk_store(p: Path, page_size: int, lru_capacity: int) -> DiskStore:
-    return DiskStore(
-        p, page_capacity=100, lru_capacity=lru_capacity, page_size=page_size
-    )
+    return DiskStore(p, page_capacity=100, lru_capacity=lru_capacity, page_size=page_size)
 
 
 @pytest.fixture()
@@ -76,9 +74,7 @@ def test_page_rotation(disk_store: DiskStore, tmp_path: Path) -> None:
 
 
 @with_disk_store(page_size=2, preload=[("a", 1), ("b", 2), ("c", 3)])
-def test_disk_scans_basic(
-    monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore
-) -> None:
+def test_disk_scans_basic(monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore) -> None:
     calls = {"count": 0}
     original_scan_disk = DiskStore._scan_disk
 
@@ -119,9 +115,7 @@ def test_disk_scans_basic(
 
 
 @with_disk_store(page_size=2, preload=[("a", 1), ("b", 2), ("c", 3)])
-def test_disk_scans_lru_miss(
-    monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore
-) -> None:
+def test_disk_scans_lru_miss(monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore) -> None:
     calls = {"read_json": 0}
     original_read_json = pd.read_json
 
@@ -148,12 +142,8 @@ def test_disk_scans_lru_miss(
     assert calls["read_json"] == 2
 
 
-@with_disk_store(
-    page_size=2, preload=[("a", 1), ("b", 2), ("c", 3), ("d", 4), ("e", 5)]
-)
-def test_disk_scans_no_hits(
-    monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore
-) -> None:
+@with_disk_store(page_size=2, preload=[("a", 1), ("b", 2), ("c", 3), ("d", 4), ("e", 5)])
+def test_disk_scans_no_hits(monkeypatch: pytest.MonkeyPatch, disk_store: DiskStore) -> None:
     calls = {"scan": 0, "read_json": 0}
     original_scan_disk = DiskStore._scan_disk
     original_read_json = pd.read_json
@@ -167,9 +157,7 @@ def test_disk_scans_no_hits(
         return original_read_json(*args, **kwargs)
 
     monkeypatch.setattr(DiskStore, "_scan_disk", _wrapped_scan_disk, raising=True)
-    monkeypatch.setattr(
-        "urim.store.disk_store.pd.read_json", _wrapped_read_json, raising=True
-    )
+    monkeypatch.setattr("urim.store.disk_store.pd.read_json", _wrapped_read_json, raising=True)
 
     # hit disk
     assert disk_store.get("x") is None

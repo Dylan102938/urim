@@ -21,9 +21,7 @@ class _WorkingPage:
         self._flushed_count: int = 0
 
         if self.fpath().exists():
-            df = pd.read_json(
-                self.fpath(), orient="records", lines=True, dtype={"value": "object"}
-            )
+            df = pd.read_json(self.fpath(), orient="records", lines=True, dtype={"value": "object"})
             self._keys = set(df["key"])
             self._page = cast(dict[str, list[Any]], df.to_dict(orient="list"))
             self._flushed_count = len(self._page.get("key", []))
@@ -72,9 +70,7 @@ class _WorkingPage:
                 values[self._flushed_count :],
                 strict=False,
             ):
-                f.write(
-                    orjson.dumps({"key": key, "value": value}).decode("utf-8") + "\n"
-                )
+                f.write(orjson.dumps({"key": key, "value": value}).decode("utf-8") + "\n")
 
         self._flushed_count = len(keys)
 
@@ -118,9 +114,7 @@ class DiskStore(Store):
             except AssertionError:
                 self._lru_insert_df(pd.DataFrame(self._wp._page), self._wp.idx)
                 self._wp.flush()
-                self._wp = _WorkingPage(
-                    self.base_dir, self._wp.idx + 1, self._wp.max_rows
-                )
+                self._wp = _WorkingPage(self.base_dir, self._wp.idx + 1, self._wp.max_rows)
                 self._wp.put(key, value)
 
     def _scan_disk(self, key: str) -> Any | None:
