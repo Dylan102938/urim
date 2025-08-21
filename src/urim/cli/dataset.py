@@ -1,26 +1,26 @@
 from __future__ import annotations
 
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 import typer
+from rich.text import Text
 
 from urim.ai.question import QuestionFactory, Rating
 from urim.cli.utils import parse_kv, random_filestub
 from urim.dataset import Dataset
 from urim.env import URIM_HOME, UrimDatasetGraph
-from urim.logging_utils import RichLogger
+from urim.logging_utils import Colors, logger
 
 dataset_app = typer.Typer(help="Dataset utilities: creation and inspection.")
 
 
 def get_ds_id(explicit_id: str | None = None) -> str:
     if explicit_id is not None:
-        assert not Path(
-            explicit_id
-        ).exists(), f"Dataset with id={explicit_id} already exists"
+        assert not Path(explicit_id).exists(), f"Dataset with id={explicit_id} already exists"
         return explicit_id
 
     for _ in range(5):
@@ -29,8 +29,7 @@ def get_ds_id(explicit_id: str | None = None) -> str:
             return id
 
     raise RuntimeError(
-        "Failed to find a unique dataset id. You may want to consider running urim"
-        " clean."
+        "Failed to find a unique dataset id. You may want to consider running urim clean."
     )
 
 
@@ -51,7 +50,7 @@ def create_next_wd(
 
     new_dataset.to_json(new_ds_path.as_posix())
     graph.add_child_and_set_wd(graph.working_dataset, new_ds_id, command=command)
-    RichLogger.success(
+    logger.success(
         f"New dataset created: {new_ds_id}. Working dataset set to"
         f" {URIM_HOME / 'datasets' / new_ds_id}.jsonl."
     )
@@ -120,16 +119,15 @@ def setup_local_dataset(
         working_ds_id = graph.working_dataset
         if ctx.invoked_subcommand not in {None, "status"}:
             assert working_ds_id is not None, (
-                "No dataset loaded, either set a working dataset or pass in a"
-                " dataset name via -n."
+                "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
             )
+            _, ds = Dataset.load_from_id(working_ds_id)
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
-            if ctx.invoked_subcommand is None:
-                ctx.invoke(status, ctx, fast=False)
-            return
+            if ctx.invoked_subcommand in {None, "status"}:
+                ctx.invoke(status, ctx)
 
-        _, ds = Dataset.load_from_id(working_ds_id)
+            return
     else:
         parsed_kwargs = parse_kv(kwargs or [])
         working_ds_id, ds = Dataset.load(
@@ -148,9 +146,29 @@ def setup_local_dataset(
 
 
 @dataset_app.command()
-def status(ctx: typer.Context, fast: bool = typer.Option(False, "--fast")) -> None:
+def status(ctx: typer.Context) -> None:
     ctx_obj: DatasetContext = ctx.obj
-    RichLogger.print_ds_status(ctx_obj.graph, fast=fast)
+    forest: dict[str, set[str]] = defaultdict(set)
+    for node_id in ctx_obj.graph.graph:
+        path_from_root = ctx_obj.graph.path_from_root(node_id)
+        for i, node_id in enumerate(path_from_root):
+            if i == 0:
+                continue
+
+            forest[path_from_root[i - 1]].add(node_id)
+
+    wd = ctx_obj.graph.working_dataset
+    logger.print(
+        Text("Current Working Dataset:", style=f"bold {Colors.PRIMARY.value}"),
+        wd or "None",
+    )
+    logger.forest(
+        "Dataset Mutations Graph",
+        {k: list(v) for k, v in forest.items()},
+        transform_fn=lambda text: (
+            Text(text, style="bold cyan") if text == wd else Text(text, style="dim")
+        ),
+    )
 
 
 @dataset_app.command()
@@ -158,34 +176,45 @@ def history(ctx: typer.Context) -> None:
     ctx_obj: DatasetContext = ctx.obj
     assert ctx_obj.graph.working_dataset is not None
 
-    RichLogger.print_ds_history(ctx_obj.graph, ctx_obj.graph.working_dataset)
+    path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
+    history: dict[str, Any] = defaultdict(list)
+    for i, node_id in enumerate(path_from_root):
+        node = ctx_obj.graph.get_node(node_id)
+        assert node is not None, f"Invalid dataset id: {node_id}"
+
+        history["order"].append(i)
+        history["dataset id"].append(node_id)
+        history["command"].append(node.command)
+
+    logger.table("Dataset Mutation History", **history)
 
 
 @dataset_app.command()
 def goto(
     ctx: typer.Context,
-    id: str = typer.Argument(
-        ..., help="Dataset id or step index from root to navigate to."
-    ),
+    id: str = typer.Argument(..., help="Dataset id or step index from root to navigate to."),
 ) -> None:
     ctx_obj: DatasetContext = ctx.obj
-    assert ctx_obj.graph.working_dataset is not None
 
     try:
-        idx = int(id)
-        path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
+        assert ctx_obj.graph.working_dataset is not None
+
+        idx, path_from_root = (
+            int(id),
+            ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset),
+        )
         assert 0 <= idx < len(path_from_root), f"Invalid step index: {idx}"
         new_wd_id = path_from_root[idx]
     except IndexError as e:
         raise typer.BadParameter(f"Invalid step index: {id}") from e
-    except ValueError:
+    except (ValueError, AssertionError):
         node = ctx_obj.graph.get_node(id)
         assert node is not None, f"Invalid dataset id: {id}"
         new_wd_id = id
 
     ctx_obj.graph.set_working_dataset(new_wd_id)
 
-    RichLogger.success(f"Working dataset set to {new_wd_id}.")
+    logger.success(f"Working dataset set to {new_wd_id}.")
 
 
 @dataset_app.command()
@@ -195,7 +224,7 @@ def back(ctx: typer.Context) -> None:
 
     path_from_root = ctx_obj.graph.path_from_root(ctx_obj.graph.working_dataset)
     if len(path_from_root) <= 1:
-        print("Already at the root dataset")
+        logger.warning("Current working dataset is a root node. No action taken.")
     else:
         ctx.invoke(goto, ctx, id=path_from_root[-2])
 
@@ -221,7 +250,7 @@ def export(
     ds = ctx_obj.dataset
     ds.to_json(out.as_posix())
 
-    RichLogger.success(f"Exported dataset to {out}.")
+    logger.success(f"Exported dataset to {out}.")
 
 
 @dataset_app.command()
@@ -257,13 +286,11 @@ def prune(
     else:
         ctx_obj.graph.prune_from_node(path_from_root[-1])
 
-    RichLogger.success(
-        f"Pruned dataset(s). Set working dataset to {ctx_obj.graph.working_dataset}"
-    )
+    logger.success(f"Pruned dataset(s). Set working dataset to {ctx_obj.graph.working_dataset}")
 
 
 @dataset_app.command()
-def head(
+def print(
     ctx: typer.Context,
     n: int = typer.Option(
         10,
@@ -271,17 +298,29 @@ def head(
         "--n",
         help="Number of rows to show.",
     ),
+    strategy: str = typer.Option(
+        "head",
+        "-s",
+        "--strategy",
+        help="Strategy to use for printing the dataset. One of: head, tail, sample.",
+    ),
 ) -> None:
     ctx_obj: DatasetContext = ctx.obj
-    RichLogger.print_dataframe(ctx_obj.dataset.df().head(n))
+    assert ctx_obj.graph.working_dataset is not None
+    assert strategy in {"head", "tail", "sample"}, f"Invalid strategy: {strategy}"
+
+    logger.df(
+        ctx_obj.graph.working_dataset,
+        ctx_obj.dataset.df(),
+        overflow_strategy=cast(Literal["head", "tail", "sample"], strategy),
+        max_rows=n,
+    )
 
 
 @dataset_app.command()
 def sample(
     ctx: typer.Context,
-    n_or_frac: float = typer.Argument(
-        ..., help="Absolute number or fraction of rows to sample."
-    ),
+    n_or_frac: float = typer.Argument(..., help="Absolute number or fraction of rows to sample."),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -300,6 +339,9 @@ def sample(
         ds.sample(frac=n_or_frac)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
+
+    if out is not None:
+        ctx.invoke(export, out)
 
 
 @dataset_app.command()
@@ -328,11 +370,9 @@ def rename(
     ),
 ) -> None:
     ctx_obj: DatasetContext = ctx.obj
-
     ds = ctx_obj.dataset
-    rename_map = parse_kv(columns or []) or None
 
-    ds.rename(columns=rename_map, hint=hint)
+    ds.rename(columns=parse_kv(columns or []), hint=hint)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -440,9 +480,7 @@ def merge(
     other: str = typer.Option(
         ..., "-b", "--other", help="Other dataset (HF id or local JSONL path)."
     ),
-    on: list[str] | None = typer.Option(
-        None, "--on", help="Column(s) to join on (repeatable)."
-    ),
+    on: list[str] | None = typer.Option(None, "--on", help="Column(s) to join on (repeatable)."),
     left_on: list[str] | None = typer.Option(
         None, "--left-on", help="Column(s) from left dataset to join on (repeatable)."
     ),
@@ -470,7 +508,7 @@ def merge(
     ds = ctx_obj.dataset
     _, other_ds = Dataset.load(other)
 
-    valid_hows = {"left", "right", "inner", "outer", "cross"}  # type: ignore[assignment]
+    valid_hows = {"left", "right", "inner", "outer", "cross"}
     how_lower = how.lower() if how else None
     if how_lower is not None:
         assert how_lower in valid_hows, f"--how must be one of {sorted(valid_hows)}"
@@ -531,9 +569,7 @@ def generate(
     out_col: str | None = typer.Option(
         None, "-c", "--out-col", help="Name of output column to write answers to."
     ),
-    model: str = typer.Option(
-        "gpt-4.1", "-m", "--model", help="Model to use for generation."
-    ),
+    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
     max_workers: int = typer.Option(
         100, "--max-workers", help="Maximum concurrent workers for generation."
     ),
@@ -601,9 +637,7 @@ def describe(
     hint: str = typer.Option(
         ..., "-h", "--hint", help="Autogenerate describe args using this hint."
     ),
-    model: str = typer.Option(
-        "gpt-4.1", "-m", "--model", help="Model to use for generation."
-    ),
+    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
     out: Path | None = typer.Option(
         None,
         "-o",

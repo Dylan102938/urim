@@ -4,6 +4,8 @@ import pytest
 
 from urim.ai.client import LLM, _collect_openai_keys
 
+requires_llm = pytest.mark.requires_llm
+
 
 def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(0, 10):
@@ -19,6 +21,7 @@ def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -
     assert keys == ["A", "B", "C"]
 
 
+@requires_llm
 def test_client_calls_openai() -> None:
     client = LLM()
     keys = _collect_openai_keys()

@@ -4,6 +4,7 @@ import ast
 import hashlib
 import inspect
 import json
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -14,13 +15,16 @@ from pydantic import BaseModel, Field
 
 from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
-from urim.ai.question_cache import QuestionCache
 from urim.env import URIM_HOME
+from urim.logging_utils import logger
+from urim.store.base import Store
+from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
 QuestionResult = tuple[EvalType, dict[str, Any]]
 
-_DEFAULT_CACHE = QuestionCache(cache_dir=URIM_HOME / "questions")
+_make_cache_lock = threading.Lock()
+_caches: dict[str, Store] = {}
 
 
 def _to_hashable(value: Any) -> Any:
@@ -31,10 +35,7 @@ def _to_hashable(value: Any) -> Any:
     if isinstance(value, QuestionFactory):
         return {"question_factory": value.model_dump()}
     if isinstance(value, dict):
-        return {
-            str(k): _to_hashable(v)
-            for k, v in sorted(value.items(), key=lambda x: str(x[0]))
-        }
+        return {str(k): _to_hashable(v) for k, v in sorted(value.items(), key=lambda x: str(x[0]))}
     if isinstance(value, list | tuple | set):
         return [_to_hashable(v) for v in value]
     if callable(value):
@@ -56,7 +57,7 @@ class QuestionFactory(BaseModel):
     cache_dir: str | None = None
     kwargs: dict[str, Any] = {}
 
-    def resolve(self, **fill_prompt_kwargs) -> Question:
+    def resolve(self, **fill_prompt_kwargs: Any) -> Question:
         prompt = self.prompt
         system = self.system
         messages = self.messages
@@ -92,8 +93,8 @@ class Question(ABC, Generic[EvalType]):
         system: str | None = None,
         enable_cache: bool = True,
         cache_dir: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         assert not prompt or not messages, "Cannot specify both prompt and messages"
 
         self.prompt = prompt
@@ -105,9 +106,7 @@ class Question(ABC, Generic[EvalType]):
 
     def __str__(self) -> str:
         wrapper = "{class_name}({insides})"
-        insides = ", ".join(
-            f"{k}={v}" for k, v in self.__dict__.items() if v is not None
-        )
+        insides = ", ".join(f"{k}={v}" for k, v in self.__dict__.items() if v is not None)
         return wrapper.format(class_name=self.__class__.__name__, insides=insides)
 
     def __repr__(self) -> str:
@@ -126,16 +125,29 @@ class Question(ABC, Generic[EvalType]):
     def resolve(
         self, model: str, *, executor: ThreadPoolExecutor | None = None
     ) -> QuestionResult[EvalType]:
+        result: QuestionResult[EvalType] | None = None
         if self.enable_cache:
-            cached = _DEFAULT_CACHE.read(self, model, executor=executor)
-            if cached is not None:
-                return cached
+            cache = self.get_model_cache(model)
+            result = cache.get(self.hash())
 
-        fresh = self.fetch(model)
-        if self.enable_cache:
-            _DEFAULT_CACHE.set(self, model, fresh)
+        if result is None:
+            result = self.fetch(model)
+            if self.enable_cache:
+                cache.put(self.hash(), result)
 
-        return fresh
+        logger.debug(f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}")
+
+        return result
+
+    def get_model_cache(self, model: str) -> Store:
+        with _make_cache_lock:
+            if model not in _caches:
+                logger.info(f"Creating cache for model: {model}")
+                _caches[model] = DiskStore(
+                    Path(self.cache_dir) / model,
+                )
+
+            return _caches[model]
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:
@@ -146,10 +158,10 @@ class Question(ABC, Generic[EvalType]):
 class FreeForm(Question[str]):
     def __init__(
         self,
-        *args,
+        *args: Any,
         judges: dict[str, tuple[QuestionFactory, str]] | None = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.judges = judges
 
@@ -187,12 +199,10 @@ class ExtractJSON(FreeForm):
         enable_cache: bool = True,
         cache_dir: str | None = None,
         use_json_system: bool = True,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
-        super().__init__(
-            prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
-        )
+        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def json(self, model: str) -> dict:
         result, _ = self.resolve(model)
@@ -208,12 +218,10 @@ class ExtractFunction(FreeForm):
         enable_cache: bool = True,
         cache_dir: str | None = None,
         use_function_system: bool = True,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
-        super().__init__(
-            prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs
-        )
+        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def fn(self, model: str) -> Callable[..., Any]:
         result, _ = super().resolve(model)
@@ -239,13 +247,13 @@ class ExtractFunction(FreeForm):
 class Rating(Question[float]):
     def __init__(
         self,
-        *args,
+        *args: Any,
         min_rating: float | None = None,
         max_rating: float | None = None,
         refusal_threshold: float = 0.75,
         top_logprobs: int = 20,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
         self.min_rating = min_rating
         self.max_rating = max_rating
@@ -263,9 +271,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert (
-            completion.top_tokens is not None
-        ), "Looks like your provider doesn't support logprobs"
+        assert completion.top_tokens is not None, (
+            "Looks like your provider doesn't support logprobs"
+        )
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"

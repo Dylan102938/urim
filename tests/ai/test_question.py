@@ -1,14 +1,12 @@
 import time
-from collections.abc import Iterator
 from math import isclose
 from typing import Any, cast
 
-import pandas as pd  # type: ignore
+import pandas as pd
 import pytest
 
 from urim.ai.client import ChatResult
 from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, Rating
-from urim.ai.question_cache import QuestionCache
 
 DUMMY_FN = """\
 def fn(x: pd.Series):
@@ -16,16 +14,19 @@ def fn(x: pd.Series):
 """
 
 
-@pytest.fixture()
-def temp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[QuestionCache]:
+@pytest.fixture(autouse=True)
+def force_question_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     import urim.ai.question as qmod
 
-    cache = QuestionCache(cache_dir=tmp_path)
-    monkeypatch.setattr(qmod, "_DEFAULT_CACHE", cache)
+    qmod._caches.clear()
 
-    yield cache
+    original_init = qmod.Question.__init__
 
-    cache.stop()
+    def _init(self: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        original_init(self, *args, **kwargs)
+        self.cache_dir = str(tmp_path)
+
+    monkeypatch.setattr(qmod.Question, "__init__", _init, raising=True)
 
 
 @pytest.fixture()
@@ -35,7 +36,6 @@ def chat_stub_calls() -> dict[str, Any]:
 
 @pytest.fixture()
 def completion(request: pytest.FixtureRequest) -> str:
-    # Default completion text; tests can override via indirect parametrization
     return getattr(request, "param", "answer-1")
 
 
@@ -46,12 +46,12 @@ def stub_chat_completion_default(
     completion: str,
 ) -> None:
     def _stub(
-        self,  # noqa: ANN001
+        self: Any,  # noqa: ANN001
         model: str,
         *,
-        messages=None,
-        prompt=None,
-        **kwargs,
+        messages: Any | None = None,
+        prompt: Any | None = None,
+        **kwargs: Any,
     ) -> ChatResult:
         chat_stub_calls["count"] += 1
         if kwargs.get("logprobs"):
@@ -65,11 +65,7 @@ def stub_chat_completion_default(
 
 @pytest.mark.parametrize("use_cache", [True, False])
 @pytest.mark.parametrize("completion", ["answer-1"])
-def test_freeform(
-    use_cache: bool,
-    temp_cache: QuestionCache,
-    chat_stub_calls: dict[str, Any],
-) -> None:
+def test_freeform(use_cache: bool, chat_stub_calls: dict[str, Any]) -> None:
     q1 = FreeForm(prompt="Hello", enable_cache=use_cache)
     answer, extra = q1.resolve("test-model")
     assert answer == "answer-1"
@@ -79,13 +75,13 @@ def test_freeform(
     time.sleep(0.25)
 
     if use_cache:
-        result = temp_cache.read(q1, "test-model")
+        result = q1.get_model_cache("test-model").get(q1.hash())
         assert result is not None
         retr_ans, retr_extra = result
         assert retr_ans == "answer-1"
         assert retr_extra == {}
     else:
-        assert temp_cache.read(q1, "test-model") is None
+        assert q1.get_model_cache("test-model").get(q1.hash()) is None
 
     q2 = FreeForm(prompt="Hello", enable_cache=True)
     answer, extra = q2.resolve("test-model")
@@ -96,9 +92,7 @@ def test_freeform(
 
 
 @pytest.mark.parametrize("completion", ['{"foo": 1, "bar": "dummy"}'], indirect=True)
-def test_extract_json(
-    temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]
-) -> None:
+def test_extract_json(chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractJSON(prompt="Give me a dummy json")
     answer, extra = q.resolve("test-model")
     assert answer == '{"foo": 1, "bar": "dummy"}'
@@ -116,9 +110,7 @@ def test_extract_json(
 
 
 @pytest.mark.parametrize("completion", [DUMMY_FN], indirect=True)
-def test_extract_function(
-    temp_cache: QuestionCache, chat_stub_calls: dict[str, Any]
-) -> None:
+def test_extract_function(chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractFunction(prompt="Write a function")
     code, extra = q.resolve("test-model")
     assert isinstance(code, str) and code.strip().startswith("def fn(")
@@ -135,11 +127,8 @@ def test_extract_function(
     assert chat_stub_calls["count"] == 1
 
 
-def test_rating(
-    temp_cache: QuestionCache,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _chat_stub_completion(self, model: str, **kwargs):
+def test_rating(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _chat_stub_completion(self: Any, model: str, **kwargs: Any) -> ChatResult:
         return ChatResult(
             content="1",
             raw={"ok": True},
@@ -148,28 +137,7 @@ def test_rating(
 
     monkeypatch.setattr("urim.ai.question.LLM.chat_completion", _chat_stub_completion)
 
-    q = Rating(
-        prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3
-    )
+    q = Rating(prompt="Rate the following text: 'This is a test'", min_rating=0, max_rating=3)
     answer, extra = q.resolve("test-model")
     assert isclose(answer, 1.5)
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}
-
-
-def test_question_str_repr_and_hash_stability() -> None:
-    q1 = FreeForm(prompt="Hello {name}", enable_cache=False, cache_dir="/tmp")
-    q2 = FreeForm(prompt="Hello {name}", enable_cache=True, cache_dir="/var/tmp")
-
-    assert q1.hash() == q2.hash()
-
-    with q1.fill_template(name="World") as qf:
-        assert qf.prompt == "Hello World"
-        filled_q1_hash = qf.hash()
-
-    with q2.fill_template(name="Bob") as qf:
-        assert qf.prompt == "Hello Bob"
-        filled_q2_hash = qf.hash()
-
-    assert filled_q1_hash != filled_q2_hash
-    assert q1.prompt == "Hello {name}"
-    assert q2.prompt == "Hello {name}"

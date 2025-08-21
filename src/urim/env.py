@@ -1,15 +1,13 @@
 import os
 from pathlib import Path
-from typing import Self
 
 from pydantic import BaseModel
+from typing_extensions import Self
 
 URIM_HOME = Path(os.environ.get("URIM_HOME", os.path.expanduser("~/.urim")))
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENROUTER_BASE_URL = os.environ.get(
-    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-)
+OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 CUSTOM_BASE_URL = os.environ.get("CUSTOM_BASE_URL")
 
@@ -92,9 +90,7 @@ class UrimDatasetGraph(BaseModel):
 
         return self._path_from_root_cache[node_id]
 
-    def prune_from_node(
-        self, node_id: str, is_base_node: bool = True, save: bool = True
-    ) -> None:
+    def prune_from_node(self, node_id: str, is_base_node: bool = True, save: bool = True) -> None:
         node = self.get_node(node_id)
         assert node is not None
         for child_id in list(node.children):

@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 from rich import box
-from rich import print as prettyprint
+from rich.console import Console, JustifyMethod, RenderableType
+from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
     Progress,
     SpinnerColumn,
     TextColumn,
+    TimeElapsedColumn,
 )
-from rich.table import Column, Table
+from rich.style import StyleType
+from rich.table import Table
+from rich.text import Text
 from rich.tree import Tree
-
-from urim.env import UrimDatasetGraph
 
 
 class Colors(Enum):
@@ -26,211 +31,196 @@ class Colors(Enum):
     INFO = "blue"
     QUESTION = "magenta"
     DEFAULT = "white"
-
-
-class LogLevel(Enum):
-    DEBUG = 0
-    INFO = 1
-    WARNING = 2
-    ERROR = 3
+    PRIMARY = "#87AFA3"
+    SECONDARY = "#B5A46D"
 
 
 class RichLogger:
-    level: LogLevel = LogLevel.INFO
-
-    @classmethod
-    def decorated_print(
-        cls,
-        subject: str = "",
-        subject_color: Colors = Colors.SUCCESS,
-        body: str = "",
-        body_color: Colors = Colors.DEFAULT,
-        first_emoji: str = "",
-        last_emoji: str = "",
+    def __init__(
+        self,
+        level: logging._Level = logging.INFO,
     ) -> None:
-        parts: list[str] = []
-        if first_emoji:
-            parts.append(first_emoji)
-        if subject:
-            parts.append(
-                f"[bold {subject_color.value}]{subject}[/bold {subject_color.value}]"
-            )
-        if body:
-            parts.append(f"[{body_color.value}]{body}[/{body_color.value}]")
-        if last_emoji:
-            parts.append(last_emoji)
-
-        prettyprint(" ".join(parts))
-
-    @classmethod
-    def info(cls, message: str) -> None:
-        if cls.level.value > LogLevel.INFO.value:
-            return
-
-        cls.decorated_print(
-            subject="INFO",
-            body=message,
-            subject_color=Colors.INFO,
+        self.console = Console()
+        self.handler = RichHandler(
+            console=self.console,
+            show_path=False,
+            markup=False,
+            show_time=True,
+            rich_tracebacks=True,
         )
 
-    @classmethod
-    def warning(cls, message: str) -> None:
-        if cls.level.value > LogLevel.WARNING.value:
-            return
+        logging.getLogger().disabled = True
 
-        cls.decorated_print(
-            subject="WARNING",
-            body=message,
-            subject_color=Colors.WARNING,
-        )
+        self._logger = logging.getLogger("urim")
+        self._logger.setLevel(level)
+        self._logger.addHandler(self.handler)
+        self._logger.propagate = False
 
-    @classmethod
-    def error(cls, message: str) -> None:
-        if cls.level.value > LogLevel.ERROR.value:
-            return
+        self._pbar_ctx: Progress | None = None
 
-        cls.decorated_print(
-            subject="ERROR",
-            body=message,
-            subject_color=Colors.ERROR,
-        )
+    def setLevel(self, level: logging._Level) -> None:
+        self._logger.setLevel(level)
 
-    @classmethod
-    def success(cls, message: str) -> None:
-        cls.decorated_print(
-            subject="SUCCESS",
-            body=message,
-            subject_color=Colors.SUCCESS,
-            first_emoji="✅",
-        )
+    def print(self, *args: Any, **kwargs: Any) -> None:
+        self.console.print(*args, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
 
-    @classmethod
-    def debug(cls, message: str) -> None:
-        if cls.level.value > LogLevel.DEBUG.value:
-            return
+    def info(self, message: str, **kwargs: Any) -> None:
+        self._logger.info(message, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
 
-        cls.decorated_print(
-            subject="DEBUG",
-            body=message,
-            subject_color=Colors.DEBUG,
-        )
+    def warning(self, message: str, **kwargs: Any) -> None:
+        self._logger.warning(message, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
 
-    @classmethod
-    def progress_bar(cls) -> Progress:
-        return Progress(
+    def error(self, message: str, **kwargs: Any) -> None:
+        self._logger.error(message, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
+
+    def success(self, message: str, **kwargs: Any) -> None:
+        self._logger.info(message, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
+
+    def debug(self, message: str, **kwargs: Any) -> None:
+        self._logger.debug(message, **kwargs)
+        if self._pbar_ctx is not None:
+            self._pbar_ctx.refresh()
+
+    @contextmanager
+    def pbar(self) -> Iterator[Progress]:
+        progress = Progress(
+            TimeElapsedColumn(),
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=80, table_column=Column(ratio=10)),
+            BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
+            console=self.console,
+            transient=True,
+            refresh_per_second=12,
         )
+        self._pbar_ctx = progress
+        try:
+            with progress:
+                yield progress
+        finally:
+            self._pbar_ctx = None
 
-    @classmethod
     def table(
-        cls,
-        title: str | None = None,
-        max_width: int | None = None,
-        **columns,
+        self,
+        title: str,
+        *,
+        max_cell_width: int = 100,
+        **columns: Any,
     ) -> None:
         column_names = list(columns.keys())
-        table = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+        assert len(column_names) > 0, "Must provide at least one column"
+        n_rows = len(columns[column_names[0]])
+        assert all(len(columns[name]) == n_rows for name in column_names), (
+            "All columns must have the same number of rows"
+        )
+
+        table = Table(
+            title=title,
+            box=box.ASCII_DOUBLE_HEAD,
+            title_style=f"bold {Colors.PRIMARY.value}",
+            title_justify="left",
+        )
 
         for name in column_names:
-            table.add_column(str(name), justify="left", overflow="fold")
+            justify: JustifyMethod = "left"
+            style: StyleType | None = None
+            if isinstance(columns[name][0], int | float):
+                justify = "right"
+                style = "bold cyan"
 
-        max_rows = 0
-        for values in columns.values():
-            max_rows = max(max_rows, len(values))
+            table.add_column(str(name), overflow="fold", justify=justify, style=style)
 
-        for row_idx in range(max_rows):
+        for row_idx in range(len(columns[column_names[0]])):
             row_values: list[str] = []
             for name in column_names:
-                values = columns.get(name, [])
-                value = values[row_idx] if row_idx < len(values) else ""
+                value = columns.get(name, [])[row_idx]
                 cell = "" if value is None else str(value)
-                if max_width is not None and len(cell) > max_width:
-                    cell = cell[: max_width - 1] + "…"
+                if max_cell_width and len(cell) > max_cell_width:
+                    side_len = max_cell_width // 2
+                    cell = cell[:side_len] + " … " + cell[-side_len:]
                 row_values.append(cell)
+
             table.add_row(*row_values)
 
-        prettyprint(table)
+        self.console.print(table)
 
-    @classmethod
-    def print_dataframe(
-        cls, df: pd.DataFrame, title: str | None = None, show_index: bool = True
-    ) -> None:
-        columns: dict[str, list[Any]] = {}
-        if show_index:
-            index_name = df.index.name or "index"
-            columns[index_name] = ["" if v is None else v for v in df.index.tolist()]
-
-        for col in df.columns:
-            columns[col] = ["" if v is None else v for v in df[col].tolist()]
-
-        cls.table(title, max_width=None, **columns)
-
-    @classmethod
-    def print_ds_history(
-        cls, graph: UrimDatasetGraph | None = None, node: str | None = None
-    ) -> None:
-        graph = graph or UrimDatasetGraph.from_file()
-        node = node or graph.working_dataset
-
-        assert node is not None
-
-        idx, ds, cmd = cast(tuple[list, list, list], ([], [], []))
-        path_from_root = graph.path_from_root(node)
-        for i, node_id in enumerate(path_from_root):
-            node_obj = graph.get_node(node_id)
-            assert node_obj is not None
-
-            idx.append(i)
-            ds.append(node_id)
-            cmd.append(node_obj.command or "")
-
-        cls.table(
-            max_width=100,
-            Index=idx,
-            Dataset=ds,
-            Command=cmd,
-        )
-
-    @classmethod
-    def print_ds_status(
-        cls,
-        graph: UrimDatasetGraph | None = None,
+    def df(
+        self,
+        title: str,
+        df: pd.DataFrame,
         *,
-        fast: bool = False,
+        overflow_strategy: Literal["head", "tail", "sample"] = "head",
+        max_rows: int = 10,
+        max_cell_width: int = 100,
     ) -> None:
-        graph = graph or UrimDatasetGraph.from_file()
+        if overflow_strategy == "head":
+            print_df = df.head(n=max_rows)
+        elif overflow_strategy == "tail":
+            print_df = df.tail(n=max_rows)
+        elif overflow_strategy == "sample":
+            print_df = df.sample(n=max_rows)
 
-        wd = graph.working_dataset
-        assert (
-            wd is not None
-        ), "No working dataset is set. Run with -n first to load a new dataset."
-
-        cls.decorated_print(
-            first_emoji=":star:",
-            subject="Working Dataset",
-            body=wd,
-            subject_color=Colors.INFO,
+        columns = cast(dict[str, list[Any]], print_df.to_dict(orient="list"))
+        self.table(
+            title,
+            max_cell_width=max_cell_width,
+            index=print_df.index.tolist(),
+            **columns,
         )
 
-        if fast:
-            return
+    def forest(
+        self,
+        title: str,
+        forest: dict[str, list[str | tuple[str, Any]]],
+        *,
+        transform_fn: Callable[[str], RenderableType] | None = None,
+    ) -> None:
+        roots = set(forest.keys())
+        for children in forest.values():
+            for child in children:
+                key = child if isinstance(child, str) else child[0]
+                if key in roots:
+                    roots.remove(key)
 
-        roots = [
-            node_id for node_id, node in graph.graph.items() if node.parent is None
-        ]
+        f = Tree(Text(title, style=f"bold {Colors.PRIMARY.value}"))
 
-        forest = Tree(f":deciduous_tree: [{Colors.QUESTION.value}]Datasets")
+        def add_children(curr_forest_node: Tree, node_id: str) -> None:
+            children = forest.get(node_id, [])
+            for child in children:
+                key = child if isinstance(child, str) else child[0]
+                value = child if isinstance(child, str) else child[1]
+                if transform_fn is not None:
+                    value = transform_fn(value)
 
-        def add_children(parent_tree: Tree, parent_id: str) -> None:
-            for child_id in graph.children(parent_id):
-                child_tree = parent_tree.add(child_id)
-                add_children(child_tree, child_id)
+                next_node = curr_forest_node.add(value)
+                add_children(next_node, key)
 
-        for root_id in sorted(roots):
-            root_tree = forest.add(root_id)
-            add_children(root_tree, root_id)
+        for root in roots:
+            root_tree = f.add(Text(root, style=f"bold {Colors.SECONDARY.value}"))
+            add_children(root_tree, root)
 
-        prettyprint(forest)
+        self.console.print(f)
+
+
+logger = RichLogger(level=logging.INFO)
+
+
+def setup_rich_logging(verbosity: int = 0) -> None:
+    global logger
+
+    if verbosity <= -1:
+        logger.setLevel(logging.DEBUG)
+    elif verbosity == 0:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)

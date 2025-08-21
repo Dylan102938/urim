@@ -30,6 +30,7 @@ dependencies = [
   "pandas>=2.0",
   "datasets>=2.19",
   "python-dotenv>=1.1.1",
+  "orjson>=3.11.2",
   "seaborn>=0.13",
   "matplotlib>=3.7",
 ]
@@ -44,6 +45,8 @@ packages = ["src/urim"]
 dev = [
   "pytest>=8.2",
   "ruff>=0.5",
+  "mypy>=1.10",
+  "types-requests",
 ]
 
 [tool.pytest.ini_options]
@@ -61,9 +64,27 @@ src = ["src", "tests"]
 select = ["E", "F", "B", "I", "UP"]
 ignore = ["B008"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/urim/ai/prompts.py" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "lf"
 docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = ["src"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+show_error_codes = true
+pretty = true
+explicit_package_bases = true
+files = ["src", "tests"]
+ignore_missing_imports = true

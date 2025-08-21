@@ -16,12 +16,8 @@ plot_app = typer.Typer(help="Plot utilities: visualize one or more datasets.")
 DatasetIds = typer.Argument(..., help="Dataset ids to pass in to plot function.")
 XCol = typer.Option(None, "-x", "--x", help="X-axis column.")
 YCol = typer.Option(None, "-y", "--y", help="Y-axis column.")
-Column = typer.Option(
-    None, "-c", "--column", help="Column used to group for separate plots."
-)
-Hue = typer.Option(
-    None, "-h", "--hue", help="Column used to group for different colors"
-)
+Column = typer.Option(None, "-c", "--column", help="Column used to group for separate plots.")
+Hue = typer.Option(None, "-h", "--hue", help="Column used to group for different colors")
 Output = typer.Option(None, "-o", "--output", help="Output file or directory.")
 Multiple = typer.Option("stack", "--multiple", help="How to handle multiple groups.")
 Palette = typer.Option("deep", "--palette", help="Color palette.")
