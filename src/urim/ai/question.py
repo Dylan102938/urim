@@ -7,7 +7,6 @@ import json
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
@@ -122,9 +121,7 @@ class Question(ABC, Generic[EvalType]):
 
         return hashlib.sha256(json_str.encode()).hexdigest()
 
-    def resolve(
-        self, model: str, *, executor: ThreadPoolExecutor | None = None
-    ) -> QuestionResult[EvalType]:
+    def resolve(self, model: str) -> QuestionResult[EvalType]:
         result: QuestionResult[EvalType] | None = None
         if self.enable_cache:
             cache = self.get_model_cache(model)
@@ -160,10 +157,12 @@ class FreeForm(Question[str]):
         self,
         *args: Any,
         judges: dict[str, tuple[QuestionFactory, str]] | None = None,
+        judge_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.judges = judges
+        self.judge_kwargs = judge_kwargs or {}
 
     def fetch(self, model: str) -> QuestionResult[str]:
         if self.messages is None:
@@ -179,11 +178,13 @@ class FreeForm(Question[str]):
         judge_results: dict[str, str | int | float | bool] = {}
         if self.judges is not None:
             for judge_name, (judge, judge_model) in self.judges.items():
-                judge_q = judge.resolve(
-                    prompt=self.prompt,
-                    messages=self.messages,
-                    answer=completion.content or "",
-                )
+                judge_factory_kwargs = {
+                    **self.judge_kwargs,
+                    "prompt": self.prompt,
+                    "messages": self.messages,
+                    "answer": completion.content or "",
+                }
+                judge_q = judge.resolve(**judge_factory_kwargs)
                 judge_result, _ = judge_q.resolve(judge_model)
                 judge_results[judge_name] = judge_result
 

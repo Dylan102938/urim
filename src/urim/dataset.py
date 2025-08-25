@@ -312,12 +312,14 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
+            assert (
+                question_col in df
+            ), "Both question and messages columns are missing, need at least one"
             questions = [
-                question_type(prompt=question, **question_kwargs)
-                for question in df[question_col].to_list()
+                question_type(
+                    prompt=question[question_col], judge_kwargs=question, **question_kwargs
+                )
+                for question in df.to_dict(orient="records")
             ]
         else:
             questions = [
@@ -328,14 +330,9 @@ class Dataset:
         num_questions = len(questions)
         results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
 
-        read_thread_pool = ThreadPoolExecutor(max_workers=40)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
-                executor.submit(
-                    question.resolve,
-                    model,
-                    executor=read_thread_pool,
-                ): idx
+                executor.submit(question.resolve, model): idx
                 for idx, question in enumerate(questions)
             }
 
