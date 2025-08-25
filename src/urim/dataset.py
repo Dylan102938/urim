@@ -312,9 +312,9 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert (
-                question_col in df
-            ), "Both question and messages columns are missing, need at least one"
+            assert question_col in df, (
+                "Both question and messages columns are missing, need at least one"
+            )
             questions = [
                 question_type(
                     prompt=question[question_col], judge_kwargs=question, **question_kwargs
