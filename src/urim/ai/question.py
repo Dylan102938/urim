@@ -226,6 +226,8 @@ class ExtractFunction(FreeForm):
 
     def fn(self, model: str) -> Callable[..., Any]:
         result, _ = super().resolve(model)
+        if result.startswith("```python") and result.endswith("```"):
+            result = result[len("```python") : -len("```")]
 
         fn_obj = None
         fn_name: str | None = None
@@ -272,9 +274,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert completion.top_tokens is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"
