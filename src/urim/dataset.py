@@ -324,7 +324,7 @@ class Dataset:
         questions: list[Question] = []
         for i, question in enumerate(questions_iter):
             common_system = question_kwargs.pop("system", None)
-            system = str(df.iloc[i, system_col]) if system_col in df else common_system
+            system = str(df.iloc[i][system_col]) if system_col in df else common_system
             questions.append(
                 question_type(
                     prompt=question,
