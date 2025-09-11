@@ -287,6 +287,7 @@ class Dataset:
         self,
         question_col: str | None = None,
         messages_col: str | None = None,
+        system_col: str | None = None,
         out_col: str | None = None,
         question_type: type[Question] = FreeForm,
         model: str = "gpt-4.1",
@@ -295,6 +296,7 @@ class Dataset:
     ) -> Self:
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
+        system_col = system_col or "system"
         out_col = out_col or "answer"
 
         df = self.df()
@@ -312,20 +314,23 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
-            questions = [
-                question_type(
-                    prompt=question[question_col], judge_kwargs=question, **question_kwargs
-                )
-                for question in df.to_dict(orient="records")
-            ]
+            assert (
+                question_col in df
+            ), "Both question and messages columns are missing, need at least one"
+            questions_iter = df[question_col].to_list()
         else:
-            questions = [
-                question_type(messages=question, **question_kwargs)
-                for question in df[messages_col].to_list()
-            ]
+            questions_iter = df[messages_col].to_list()
+
+        questions: list[Question] = []
+        for question in questions_iter:
+            system = df[system_col] if system_col in df else question_kwargs.get("system", None)
+            questions.append(
+                question_type(
+                    prompt=question,
+                    system=system,
+                    **question_kwargs,
+                )
+            )
 
         num_questions = len(questions)
         results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
