@@ -314,16 +314,17 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
+            assert (
+                question_col in df
+            ), "Both question and messages columns are missing, need at least one"
             questions_iter = df[question_col].to_list()
         else:
             questions_iter = df[messages_col].to_list()
 
         questions: list[Question] = []
         for question in questions_iter:
-            system = df[system_col] if system_col in df else question_kwargs.get("system", None)
+            common_system = question_kwargs.pop("system", None)
+            system = df[system_col] if system_col in df else common_system
             questions.append(
                 question_type(
                     prompt=question,
