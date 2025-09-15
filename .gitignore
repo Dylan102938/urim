@@ -33,3 +33,5 @@ ai_summary.md
 urim/
 !src/urim
 .env
+# Local scratch data
+test.jsonl
