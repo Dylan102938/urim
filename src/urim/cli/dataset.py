@@ -11,7 +11,7 @@ from rich.text import Text
 
 from urim.ai.question import QuestionFactory, Rating
 from urim.cli.utils import parse_kv, random_filestub
-from urim.dataset import Dataset
+from urim.dataset import Dataset, ModelPreset
 from urim.env import URIM_HOME, UrimDatasetGraph
 from urim.logging_utils import Colors, logger
 
@@ -64,7 +64,7 @@ class DatasetContext:
         self,
         graph: UrimDatasetGraph,
         dataset: Dataset,
-    ):
+    ) -> None:
         self.graph = graph
         self.dataset = dataset
 
@@ -118,9 +118,9 @@ def setup_local_dataset(
     if dataset is None:
         working_ds_id = graph.working_dataset
         if ctx.invoked_subcommand not in {None, "status"}:
-            assert working_ds_id is not None, (
-                "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
-            )
+            assert (
+                working_ds_id is not None
+            ), "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
             _, ds = Dataset.load_from_id(working_ds_id)
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
@@ -359,6 +359,12 @@ def rename(
         "--hint",
         help="Autogenerate rename map using this hint.",
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.FAST,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -371,8 +377,7 @@ def rename(
 ) -> None:
     ctx_obj: DatasetContext = ctx.obj
     ds = ctx_obj.dataset
-
-    ds.rename(columns=parse_kv(columns or []), hint=hint)
+    ds.rename(columns=parse_kv(columns or []), hint=hint, model=model)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -395,6 +400,12 @@ def drop(
         "--hint",
         help="Autogenerate drop list using this hint.",
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.FAST,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -405,7 +416,7 @@ def drop(
     ctx_obj: DatasetContext = ctx.obj
 
     ds = ctx_obj.dataset
-    ds.drop(columns=columns, hint=hint)
+    ds.drop(columns=columns, hint=hint, model=model)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -422,6 +433,12 @@ def filter(
         "--hint",
         help="Autogenerate filter function using this hint.",
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -432,7 +449,7 @@ def filter(
     ctx_obj: DatasetContext = ctx.obj
 
     ds = ctx_obj.dataset
-    ds.filter(hint=hint)
+    ds.filter(hint=hint, model=model)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -455,6 +472,12 @@ def apply(
         "--hint",
         help="Autogenerate apply function using this hint.",
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -466,7 +489,7 @@ def apply(
 
     ds = ctx_obj.dataset
 
-    ds.apply(column=column, hint=hint)
+    ds.apply(column=column, hint=hint, model=model)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -496,6 +519,12 @@ def merge(
     hint: str | None = typer.Option(
         None, "-h", "--hint", help="Autogenerate merge args using this hint."
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -520,6 +549,7 @@ def merge(
         right_on=right_on,
         how=how_lower,  # type: ignore[arg-type]
         hint=hint,
+        model=model,
     )
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
@@ -537,6 +567,12 @@ def concat(
     hint: str | None = typer.Option(
         None, "-h", "--hint", help="Autogenerate concat rename map using this hint."
     ),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED,
+        "-m",
+        "--model",
+        help="Model to use when AI assistance is needed.",
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
@@ -549,7 +585,7 @@ def concat(
     ds = ctx_obj.dataset
     _, other_ds = Dataset.load(other)
 
-    ds.concat(other_ds, hint=hint)
+    ds.concat(other_ds, hint=hint, model=model)
 
     create_next_wd(ctx_obj.graph, " ".join(sys.argv), ds)
 
@@ -569,7 +605,12 @@ def generate(
     out_col: str | None = typer.Option(
         None, "-c", "--out-col", help="Name of output column to write answers to."
     ),
-    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED,
+        "-m",
+        "--model",
+        help="Model to use for generation.",
+    ),
     max_workers: int = typer.Option(
         100, "--max-workers", help="Maximum concurrent workers for generation."
     ),
@@ -611,7 +652,7 @@ def generate(
     for k, template in judge_dict.items():
         judge_dict[k] = (
             QuestionFactory(type=Rating, prompt=template),
-            "gpt-4.1",
+            ModelPreset.BALANCED,
         )
 
     ds.generate(
@@ -637,7 +678,9 @@ def describe(
     hint: str = typer.Option(
         ..., "-h", "--hint", help="Autogenerate describe args using this hint."
     ),
-    model: str = typer.Option("gpt-4.1", "-m", "--model", help="Model to use for generation."),
+    model: ModelPreset = typer.Option(
+        ModelPreset.BALANCED, "-m", "--model", help="Model to use for generation."
+    ),
     out: Path | None = typer.Option(
         None,
         "-o",
