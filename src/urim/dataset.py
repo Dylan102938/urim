@@ -80,7 +80,7 @@ class Dataset:
         self,
         columns: Renamer | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST,
+        model: str = ModelPreset.FAST.value,
     ) -> Self:
         assert columns is not None or hint is not None
         df = self.df()
@@ -102,7 +102,7 @@ class Dataset:
         self,
         columns: list[str] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST,
+        model: str = ModelPreset.FAST.value,
     ) -> Self:
         assert columns is not None or hint is not None, "Must provide either columns or hint"
 
@@ -127,7 +127,7 @@ class Dataset:
         self,
         fn: Callable[[pd.Series], bool] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED,
+        model: str = ModelPreset.BALANCED.value,
     ) -> Self:
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
@@ -151,7 +151,7 @@ class Dataset:
         fn: Callable[[pd.Series], Any] | None = None,
         column: str | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED,
+        model: str = ModelPreset.BALANCED.value,
     ) -> Self:
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
@@ -188,7 +188,7 @@ class Dataset:
         right_on: str | list[str] | None = None,
         how: Literal["left", "right", "inner", "outer", "cross"] = "left",
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED,
+        model: str = ModelPreset.BALANCED.value,
         **kwargs: Any,
     ) -> Self:
         df, other_df = self.df(), other.df()
@@ -242,7 +242,7 @@ class Dataset:
         self,
         other: Self,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED,
+        model: str = ModelPreset.BALANCED.value,
     ) -> Self:
         df, other_df = self.df(), other.df()
         columns = set(df.columns)
@@ -277,7 +277,7 @@ class Dataset:
 
         return self
 
-    def describe(self, hint: str, model: str = ModelPreset.BALANCED) -> Self:
+    def describe(self, hint: str, model: str = ModelPreset.BALANCED.value) -> Self:
         question = FreeForm(
             prompt=GENERATE_DESCRIBE_CHAIN_PROMPT.format(
                 columns=", ".join(self.df().columns),
@@ -299,7 +299,7 @@ class Dataset:
         system_col: str | None = None,
         out_col: str | None = None,
         question_type: type[Question] = FreeForm,
-        model: str = ModelPreset.BALANCED,
+        model: str = ModelPreset.BALANCED.value,
         max_workers: int = 100,
         **question_kwargs: Any,
     ) -> Self:
@@ -323,9 +323,9 @@ class Dataset:
             df = self.df()
 
         if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
+            assert (
+                question_col in df
+            ), "Both question and messages columns are missing, need at least one"
             questions_iter = df[question_col].to_list()
         else:
             questions_iter = df[messages_col].to_list()
