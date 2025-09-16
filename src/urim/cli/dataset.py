@@ -118,9 +118,9 @@ def setup_local_dataset(
     if dataset is None:
         working_ds_id = graph.working_dataset
         if ctx.invoked_subcommand not in {None, "status"}:
-            assert working_ds_id is not None, (
-                "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
-            )
+            assert (
+                working_ds_id is not None
+            ), "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
             _, ds = Dataset.load_from_id(working_ds_id)
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
@@ -360,7 +360,7 @@ def rename(
         help="Autogenerate rename map using this hint.",
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.FAST,
+        ModelPreset.FAST.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -401,7 +401,7 @@ def drop(
         help="Autogenerate drop list using this hint.",
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.FAST,
+        ModelPreset.FAST.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -434,7 +434,7 @@ def filter(
         help="Autogenerate filter function using this hint.",
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED,
+        ModelPreset.BALANCED.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -473,7 +473,7 @@ def apply(
         help="Autogenerate apply function using this hint.",
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED,
+        ModelPreset.BALANCED.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -520,7 +520,7 @@ def merge(
         None, "-h", "--hint", help="Autogenerate merge args using this hint."
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED,
+        ModelPreset.BALANCED.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -568,7 +568,7 @@ def concat(
         None, "-h", "--hint", help="Autogenerate concat rename map using this hint."
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED,
+        ModelPreset.BALANCED.value,
         "-m",
         "--model",
         help="Model to use when AI assistance is needed.",
@@ -606,7 +606,7 @@ def generate(
         None, "-c", "--out-col", help="Name of output column to write answers to."
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED,
+        ModelPreset.BALANCED.value,
         "-m",
         "--model",
         help="Model to use for generation.",
@@ -652,7 +652,7 @@ def generate(
     for k, template in judge_dict.items():
         judge_dict[k] = (
             QuestionFactory(type=Rating, prompt=template),
-            ModelPreset.BALANCED,
+            ModelPreset.BALANCED.value,
         )
 
     ds.generate(
@@ -679,7 +679,7 @@ def describe(
         ..., "-h", "--hint", help="Autogenerate describe args using this hint."
     ),
     model: ModelPreset = typer.Option(
-        ModelPreset.BALANCED, "-m", "--model", help="Model to use for generation."
+        ModelPreset.BALANCED.value, "-m", "--model", help="Model to use for generation."
     ),
     out: Path | None = typer.Option(
         None,
