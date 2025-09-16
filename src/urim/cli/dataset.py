@@ -118,9 +118,9 @@ def setup_local_dataset(
     if dataset is None:
         working_ds_id = graph.working_dataset
         if ctx.invoked_subcommand not in {None, "status"}:
-            assert (
-                working_ds_id is not None
-            ), "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
+            assert working_ds_id is not None, (
+                "No dataset loaded, either set a working dataset or pass in a dataset name via -n."
+            )
             _, ds = Dataset.load_from_id(working_ds_id)
         else:
             ctx.obj = DatasetContext(graph=graph, dataset=Dataset(df=pd.DataFrame()))
