@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from urim.ai.client import ChatResult
-from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, Rating
+from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, NextToken, Rating
 
 DUMMY_FN = """\
 def fn(x: pd.Series):
@@ -56,7 +56,7 @@ def stub_chat_completion_default(
         chat_stub_calls["count"] += 1
         if kwargs.get("logprobs"):
             top = {"50": 0.6, "70": 0.3, "x": 0.1}
-            return ChatResult(content=None, raw={"ok": True}, top_tokens=top)
+            return ChatResult(content=completion, raw={"ok": True}, top_tokens=top)
 
         return ChatResult(content=completion, raw={"ok": True})
 
@@ -141,3 +141,11 @@ def test_rating(monkeypatch: pytest.MonkeyPatch) -> None:
     answer, extra = q.resolve("test-model")
     assert isclose(answer, 1.5)
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}
+
+
+def test_next_token(chat_stub_calls: dict[str, Any]) -> None:
+    q = NextToken(prompt="Predict next token")
+    answer, extra = q.resolve("test-model")
+    assert answer == "answer-1"
+    assert extra == {"probs": {"50": 0.6, "70": 0.3, "x": 0.1}}
+    assert chat_stub_calls["count"] == 1
