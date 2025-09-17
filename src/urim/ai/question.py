@@ -274,9 +274,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert completion.top_tokens is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"
@@ -307,6 +307,14 @@ class Rating(Question[float]):
 
 
 class NextToken(Question):
+    def __init__(
+        self,
+        *args: Any,
+        top_logprobs: int = 20,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
+
     def fetch(self, model: str) -> QuestionResult[str]:
         completion = LLM().chat_completion(
             model,
