@@ -5,7 +5,7 @@ import random
 import string
 from typing import Any
 
-import typer
+from urim.env import UrimDatasetGraph
 
 
 def coerce_value(text: str) -> Any:
@@ -166,59 +166,7 @@ def random_filestub() -> str:
     )
 
 
-# Reusable Typer option factories
-Output = typer.Option(
-    None,
-    "--output",
-    "-o",
-    help=(
-        "Output file or directory. If directory, name is derived. Defaults to $URIM_HOME/datasets"
-    ),
-    dir_okay=True,
-    file_okay=True,
-    writable=True,
-    resolve_path=True,
-)
-Filename = typer.Option(
-    None,
-    "--filename",
-    "-f",
-    help="Override output filename when --output is a directory.",
-)
-Split = typer.Option(
-    "train",
-    "--split",
-    "-s",
-    help="Dataset split.",
-)
-Limit = typer.Option(
-    None,
-    "--limit",
-    help="Optional cap on number of rows.",
-)
-Args = typer.Option(
-    None,
-    "--arg",
-    help="Additional positional args (repeatable).",
-)
-Kwargs = typer.Option(
-    None,
-    "--kw",
-    help="Additional keyword args as key=value (repeatable).",
-)
-Rename = typer.Option(
-    None,
-    "--rename",
-    "-r",
-    help="Column rename mapping as old=new (repeatable).",
-)
-Columns = typer.Option(
-    None,
-    "--columns",
-    help="List of columns.",
-)
-Hint = typer.Option(
-    None,
-    "--hint",
-    help="Optional hint to drive AI-assisted renaming logic.",
-)
+def list_dataset_ids(graph: UrimDatasetGraph | None = None) -> list[str]:
+    graph = graph or UrimDatasetGraph.from_file()
+
+    return sorted(graph.graph.keys())

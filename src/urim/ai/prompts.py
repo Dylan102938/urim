@@ -9,7 +9,7 @@ OUTPUT_FUNCTION_SYSTEM = (
     " use any external dependencies, import them at the start of your function."
 )
 
-# UTILITY PROMPTS
+# DATASET UTILITY PROMPTS
 DATASET_RENAME_PROMPT = (
     "I have a dataset with the following columns: {columns}. Here is also the head"
     " output from the dataset:\n{head}\n\nI want to rename the columns with the"
@@ -172,3 +172,18 @@ Some additional rules you should keep in mind:
 2) None of these functions take in the actual dataset as an argument. You can assume that they will all have access to the dataset via some global variable. These functions will be called in the order that you output them.
 3) You should NEVER output any function calls that are not in the list of functions above.
 """
+
+# PLOT UTILITY PROMPTS
+GET_KWARGS_PROMPT = (
+    "You need to reorder columns for a seaborn plotting function. Given:\n- Dataset"
+    " columns and types:\n{columns}\n- Target graph type: {graph_type}\n- Visualization"
+    " requirements: {scheme}\n- Candidate columns: {guessed_columns}\n\nYour task:"
+    " Arrange these candidate columns in the optimal order for seaborn's plotting"
+    " function keyword arguments. Specifically, you should output a JSON object with up"
+    " to 4 keys, each corresponding to one of `x`, `y`, `hue`, or `col`. The values"
+    " should be the columns whose entries would result in the most informative graph"
+    " when considering the shape of the data and visualization requirements. Note that"
+    " you may not need to change any of the existing candidate assignments if they are"
+    " already appropriate. In such cases, you should just output a JSON object with the"
+    " same assignments as the candidate proposal."
+)
