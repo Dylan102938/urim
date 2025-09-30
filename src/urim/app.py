@@ -17,7 +17,7 @@ app = typer.Typer(
 def main(ctx: typer.Context) -> None:
     def cleanup() -> None:
         for cache in _caches.values():
-            cache._wp.flush()
+            cache.flush()
 
     ctx.call_on_close(cleanup)
 
