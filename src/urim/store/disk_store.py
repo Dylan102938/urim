@@ -65,10 +65,7 @@ class DiskStore(Store):
             self._page.drop(index=to_drop, inplace=True)
 
     def flush(self) -> None:
-        # Ensure only one flush at a time and capture a consistent snapshot
         with self._flush_lock:
-            with self._lock:
-                # Write the index (key) as a normal column so reload works
-                snapshot = self._page.reset_index(names="key").copy()
-
+            self.store_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = self._page.reset_index(names="key").copy()
             snapshot.to_json(self.store_path, orient="records", lines=True)
