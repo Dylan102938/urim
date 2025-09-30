@@ -67,5 +67,5 @@ class DiskStore(Store):
     def flush(self) -> None:
         with self._flush_lock:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            snapshot = self._page.reset_index(names="key").copy()
+            snapshot = self._page.copy().reset_index(names="key")
             snapshot.to_json(self.store_path, orient="records", lines=True)
