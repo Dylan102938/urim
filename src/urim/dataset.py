@@ -123,9 +123,9 @@ class Dataset:
         inplace: bool = False,
         **kwargs: Any,
     ) -> "Dataset":
-        assert (
-            columns is not None or hint is not None
-        ), "Must provide a hint if no columns are provided"
+        assert columns is not None or hint is not None, (
+            "Must provide a hint if no columns are provided"
+        )
 
         if columns is None:
             assert hint is not None
