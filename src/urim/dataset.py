@@ -1,296 +1,228 @@
-from __future__ import annotations
-
-import hashlib
-import shutil
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, cast
-
-import pandas as pd
-from datasets import Dataset as HFDataset
-from datasets import load_dataset
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any
 
 from urim.ai.prompts import (
     DATASET_APPLY_PROMPT,
-    DATASET_CONCAT_HINT_PROMPT,
-    DATASET_CONCAT_NO_HINT_PROMPT,
     DATASET_DROP_NO_HINT_PROMPT,
     DATASET_DROP_WITH_HINT_PROMPT,
     DATASET_FILTER_PROMPT,
-    DATASET_MERGE_HINT_PROMPT,
-    DATASET_MERGE_NO_HINT_PROMPT,
     DATASET_RENAME_PROMPT,
-    GENERATE_DESCRIBE_CHAIN_PROMPT,
 )
-from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, Question
-from urim.env import URIM_HOME
-from urim.logging_utils import logger
+from urim.ai.question import FreeForm
 
-Axis = int | Literal["index", "columns", "rows"]
-Renamer = Mapping[Any, Hashable]
+if TYPE_CHECKING:
+    import pandas as pd
 
+    from urim.ai.question import Question
 
-class ModelPreset(str, Enum):
-    FAST = "gpt-4.1-mini"
-    BALANCED = "gpt-4.1"
-    THOROUGH = "gpt-5"
+PRESET_FAST = "gpt-4.1-mini"
+PRESET_BALANCED = "gpt-4.1"
+PRESET_THOROUGH = "gpt-5"
 
 
-def get_hf_dataset_local_id(**kwargs: Any) -> str:
-    sorted_keys = sorted(kwargs.keys())
-    semantic_id = "_".join(f"{k}={kwargs[k]}" for k in sorted_keys)
-    serialized_id = hashlib.sha256(semantic_id.encode()).hexdigest()
+def extract_op_kwargs(
+    template: str,
+    model: str,
+    *,
+    curr_df: pd.DataFrame | None = None,
+    question_kwargs: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    from urim.ai.question import ExtractJSON
 
-    return serialized_id
+    if curr_df is not None:
+        if len(curr_df) < 5:
+            rows = curr_df
+        else:
+            rows = curr_df.iloc[:: len(curr_df) // 5]
+        prompt = template.format({"head": rows.head(), **kwargs})
+    else:
+        prompt = template.format(**kwargs)
+
+    for _ in range(3):
+        try:
+            question = ExtractJSON(prompt, **(question_kwargs or {}))
+            return question.json(model)
+        except Exception:
+            pass
+
+    raise Exception("Failed to extract kwargs")
 
 
-def get_dataset_local_id(path: Path) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read(200 * 1024)).hexdigest()
+def extract_op_fn(
+    template: str,
+    model: str,
+    *,
+    curr_df: pd.DataFrame | None = None,
+    question_kwargs: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Callable[..., Any]:
+    from urim.ai.question import ExtractFunction
+
+    if curr_df is not None:
+        if len(curr_df) < 5:
+            rows = curr_df
+        else:
+            rows = curr_df.iloc[:: len(curr_df) // 5]
+        prompt = template.format({"head": rows.head(), **kwargs})
+    else:
+        prompt = template.format(**kwargs)
+
+    for _ in range(3):
+        try:
+            question = ExtractFunction(prompt, **(question_kwargs or {}))
+            return question.fn(model)
+        except Exception:
+            pass
+
+    raise Exception("Failed to extract fn")
 
 
 class Dataset:
-    def __init__(self, input_path: str | None = None, df: pd.DataFrame | None = None):
-        assert input_path is not None or df is not None, "Must provide either a path or a DataFrame"
-        self.path = input_path
-        self._df = df
+    def __init__(self, dataset: "pd.DataFrame" | str, **kwargs: Any):
+        import pandas as pd
+        from datasets import load_dataset
 
-    def df(self) -> pd.DataFrame:
-        if self._df is None:
-            assert self.path is not None
-            self._df = pd.read_json(self.path, lines=True)
+        self._df: pd.DataFrame
+        if isinstance(dataset, str):
+            if Path(dataset).exists():
+                self._df = pd.read_json(dataset, orient="records", lines=True, **kwargs)
+            else:
+                self._df = load_dataset(dataset, **kwargs).to_pandas()
+        else:
+            self._df = dataset
 
+        self._init_dataset_kwargs = kwargs
+
+    def df(self) -> "pd.DataFrame":
         return self._df
 
-    def to_json(self, output_path: str) -> None:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        self.df().to_json(output_path, orient="records", lines=True)
+    def to_json(self, out_path: str | Path) -> None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        self._df.to_json(out_path, orient="records", lines=True)
 
-    def sample(self, n: int | None = None, frac: float | None = None, **kwargs: Any) -> Self:
-        assert n is not None or frac is not None, "Must provide either n or frac"
-
-        self._df = self.df().sample(n=n, frac=frac, **kwargs)
-        return self
+    def sample(
+        self,
+        n: int | None = None,
+        frac: float | None = None,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> "Dataset":
+        df = self._df.sample(n=n, frac=frac, **kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
     def rename(
         self,
-        columns: Renamer | None = None,
+        columns: Mapping[Any, Hashable] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST.value,
-    ) -> Self:
-        assert columns is not None or hint is not None
-        df = self.df()
-        if columns is None:
-            assert hint is not None, "Must provide a hint if no columns are provided"
-            question = ExtractJSON(
-                prompt=DATASET_RENAME_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
-                    scheme=hint,
-                )
-            )
-            columns = question.json(model)
+        model: str = PRESET_FAST,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> "Dataset":
+        assert (
+            columns is not None or hint is not None
+        ), "Must provide a hint if no columns are provided"
 
-        self._df = df.rename(columns=columns)
-        return self
+        if columns is None:
+            assert hint is not None
+            kwargs = {
+                **kwargs,
+                **extract_op_kwargs(
+                    DATASET_RENAME_PROMPT,
+                    columns=", ".join(self._df.columns),
+                    scheme=hint,
+                    model=model,
+                    curr_df=self._df,
+                ),
+            }
+
+        df = self._df.rename(**kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
     def drop(
         self,
-        columns: list[str] | None = None,
+        columns: list[str] | str | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST.value,
-    ) -> Self:
+        model: str = PRESET_FAST,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> "Dataset":
         assert columns is not None or hint is not None, "Must provide either columns or hint"
 
-        df = self.df()
         if columns is None:
-            drop_prompt = (
-                DATASET_DROP_NO_HINT_PROMPT if hint is None else DATASET_DROP_WITH_HINT_PROMPT
-            )
-            question = ExtractJSON(
-                prompt=drop_prompt.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
+            kwargs = {
+                **kwargs,
+                **extract_op_kwargs(
+                    DATASET_DROP_WITH_HINT_PROMPT if hint else DATASET_DROP_NO_HINT_PROMPT,
+                    columns=", ".join(self._df.columns),
                     scheme=hint,
-                )
-            )
-            columns = question.json(model).get("columns", [])
+                    model=model,
+                    curr_df=self._df,
+                ),
+            }
 
-        self._df = df.drop(columns=columns)
-        return self
+        df = self._df.drop(**kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
     def filter(
         self,
         fn: Callable[[pd.Series], bool] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
+        model: str = PRESET_BALANCED,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> "Dataset":
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
-        df = self.df()
         if fn is None:
-            assert hint is not None, "Must provide a hint if no function is provided"
-            question = ExtractFunction(
-                DATASET_FILTER_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
+            kwargs = {
+                **kwargs,
+                **extract_op_kwargs(
+                    DATASET_FILTER_PROMPT,
+                    columns=", ".join(self._df.columns),
                     scheme=hint,
-                )
-            )
-            fn = question.fn(model)
+                    model=model,
+                    curr_df=self._df,
+                ),
+            }
 
-        self._df = df[df.apply(fn, axis=1)]
-        return self
+        df = self._df.filter(**kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
     def apply(
         self,
-        fn: Callable[[pd.Series], Any] | None = None,
+        fn: Callable[[pd.Series], bool] | None = None,
         column: str | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
+        model: str = PRESET_BALANCED,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> "Dataset":
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
-        df = self.df()
-        fn_callable: Callable[[pd.Series], Any]
         if fn is None:
-            assert hint is not None, "Must provide a hint if no function is provided"
-            question = ExtractFunction(
-                prompt=DATASET_APPLY_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
-                    scheme=hint,
-                    column_hint=(
-                        f"The column's name should be {column}." if column is not None else ""
-                    ),
-                )
-            )
-            wrapper_fn = question.fn(model)
-            gen_column, gen_fn = cast(tuple[str, Callable[[pd.Series], Any]], wrapper_fn())
-            column, fn_callable = gen_column, gen_fn
-        else:
-            fn_callable = fn
-
-        assert column is not None, "Must provide a column name"
-        df[column] = df.apply(fn_callable, axis=1)
-
-        return self
-
-    def merge(
-        self,
-        other: Self,
-        on: str | list[str] | None = None,
-        left_on: str | list[str] | None = None,
-        right_on: str | list[str] | None = None,
-        how: Literal["left", "right", "inner", "outer", "cross"] = "left",
-        hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-        **kwargs: Any,
-    ) -> Self:
-        df, other_df = self.df(), other.df()
-        ons_none = on is None and left_on is None and right_on is None
-        merge_args = {
-            "on": on,
-            "left_on": left_on,
-            "right_on": right_on,
-            "how": how,
-        }
-
-        merge_hint = ""
-        if hint is not None:
-            merge_hint += hint
-        if not ons_none and merge_hint:
-            defined_args = [f"{k}={v}" for k, v in merge_args.items() if v is not None]
-            merge_hint += f"\n\nI've already set the following args: {', '.join(defined_args)}"
-        if merge_hint:
-            merge_template = (
-                DATASET_MERGE_NO_HINT_PROMPT if hint is None else DATASET_MERGE_HINT_PROMPT
-            )
-
-            question = ExtractJSON(
-                prompt=merge_template.format(
-                    columns=", ".join(df.columns),
-                    other_columns=", ".join(other_df.columns),
-                    head=df.head(5),
-                    other_head=other_df.head(5),
-                    scheme=merge_hint,
-                )
-            )
-
-            json = question.json(model)
-            on = json.get("on")
-            left_on = json.get("left_on")
-            right_on = json.get("right_on")
-            how = json.get("how", "left")
-
-        self._df = df.merge(
-            other_df,
-            on=on,
-            left_on=left_on,
-            right_on=right_on,
-            how=how,
-            **kwargs,
-        )
-
-        return self
-
-    def concat(
-        self,
-        other: Self,
-        hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
-        df, other_df = self.df(), other.df()
-        columns = set(df.columns)
-        other_columns = set(other_df.columns)
-        col_diff = columns - other_columns
-
-        if len(col_diff) > 0 or hint is not None:
-            concat_prompt = (
-                DATASET_CONCAT_NO_HINT_PROMPT if hint is None else DATASET_CONCAT_HINT_PROMPT
-            )
-            question = ExtractJSON(
-                prompt=concat_prompt.format(
-                    columns=", ".join(df.columns),
-                    other_columns=", ".join(other_df.columns),
-                    head=df.head(5),
-                    other_head=other_df.head(5),
-                    scheme=hint,
-                )
-            )
-            json: dict[str, str] = question.json(model)
-            df1_columns, df2_columns = {}, {}
-            for k, v in json.items():
-                if k.startswith("df1_"):
-                    df1_columns[k.removeprefix("df1_")] = v
-                elif k.startswith("df2_"):
-                    df2_columns[k.removeprefix("df2_")] = v
-
-            df = df.rename(columns=df1_columns)
-            other_df = other_df.rename(columns=df2_columns)
-
-        self._df = pd.concat([df, other_df], axis=0)
-
-        return self
-
-    def describe(self, hint: str, model: str = ModelPreset.BALANCED.value) -> Self:
-        question = FreeForm(
-            prompt=GENERATE_DESCRIBE_CHAIN_PROMPT.format(
-                columns=", ".join(self.df().columns),
-                head=self.df().head(5),
+            wrapper_fn = extract_op_fn(
+                DATASET_APPLY_PROMPT,
+                columns=", ".join(self._df.columns),
+                column_hint=f"The column's name should be {column}." if column is not None else "",
                 scheme=hint,
-            ),
-        )
+                model=model,
+                curr_df=self._df,
+            )
 
-        answer, _ = question.resolve(model)
-        for fn in answer.split("\n"):
-            self._execute_describe_fn(fn)
+            column, fn = wrapper_fn()
 
-        return self
+        df = self._df.copy()
+        df[column] = df.apply(fn, axis=1, **kwargs)
+
+        return self._maybe_inplace(df, inplace=inplace)
 
     def generate(
         self,
@@ -298,45 +230,37 @@ class Dataset:
         messages_col: str | None = None,
         system_col: str | None = None,
         out_col: str | None = None,
-        question_type: type[Question] = FreeForm,
-        model: str = ModelPreset.BALANCED.value,
+        question_type: type["Question"] = FreeForm,
+        model: str = PRESET_BALANCED,
         max_workers: int = 100,
+        inplace: bool = False,
         **question_kwargs: Any,
-    ) -> Self:
+    ) -> "Dataset":
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
         system_col = system_col or "system"
         out_col = out_col or "answer"
 
-        df = self.df()
+        assert question_col is not None or messages_col is not None
 
-        if messages_col not in df and question_col not in df:
-            self.rename(
-                hint=(
-                    "Pick one column that is the likeliest to contain either questions"
-                    " or a list of messages that fit the OpenAI chat completion"
-                    f" format. Rename that column to `{question_col}` if it contains"
-                    f" strings and `{messages_col}` if it contains OpenAI-style chat"
-                    " completion messages."
-                )
-            )
-            df = self.df()
+        input_col = messages_col or question_col
 
-        if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
-            questions_iter = df[question_col].to_list()
-        else:
-            questions_iter = df[messages_col].to_list()
+        assert input_col in self._df.columns
 
+        input_iter = self._df[input_col].to_list()
         questions: list[Question] = []
-        for i, question in enumerate(questions_iter):
+        for i, inp in enumerate(input_iter):
             common_system = question_kwargs.pop("system", None)
-            system = str(df.iloc[i][system_col]) if system_col in df else common_system
+            system = (
+                str(self._df.iloc[i][system_col])
+                if system_col in self._df.columns
+                else common_system
+            )
             questions.append(
                 question_type(
-                    prompt=question,
+                    prompt=inp,  # TODO: fix bug here that only supports prompt vs messages
                     system=system,
                     **question_kwargs,
                 )
@@ -351,17 +275,14 @@ class Dataset:
                 for idx, question in enumerate(questions)
             }
 
-            with logger.pbar() as progress:
-                task_id = progress.add_task("Generating…", total=num_questions)
-                for future in as_completed(future_to_index):
-                    idx = future_to_index[future]
-                    try:
-                        results[idx] = future.result()
-                    except Exception as exc:
-                        results[idx] = ("", {"error": str(exc)})
-                    finally:
-                        progress.advance(task_id, 1)
+            for future in as_completed(future_to_index):
+                idx = future_to_index[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:
+                    results[idx] = ("", {"error": str(exc)})
 
+        df = self._df.copy()
         df[out_col] = [result[0] for result in results]
 
         extra_columns: dict[str, list[Any]] = defaultdict(list)
@@ -372,96 +293,23 @@ class Dataset:
         for k, v in extra_columns.items():
             df[k] = v
 
-        return self
+        return self._maybe_inplace(df, inplace=inplace)
 
-    @classmethod
-    def is_valid_id(cls, id: str) -> bool:
-        path = URIM_HOME / "datasets" / f"{id}.jsonl"
-        return path.exists()
+    def concatenate(
+        self, other: "Dataset" | list["Dataset"], *, inplace: bool = False, **kwargs: Any
+    ) -> "Dataset":
+        import pandas as pd
 
-    @classmethod
-    def load_from_id(cls, id: str) -> tuple[str, Self]:
-        assert cls.is_valid_id(id), f"Dataset {id} not found"
-        return id, cls(input_path=str(URIM_HOME / "datasets" / f"{id}.jsonl"))
+        if not isinstance(other, list):
+            other = [other]
 
-    @classmethod
-    def load_from_local(cls, path: Path) -> tuple[str, Self]:
-        if path.is_relative_to(URIM_HOME / "datasets"):
-            ds_id = path.relative_to(URIM_HOME / "datasets").with_suffix("").name
+        return self._maybe_inplace(
+            pd.concat([self._df, *[ds._df for ds in other]], axis=0, **kwargs), inplace=inplace
+        )
+
+    def _maybe_inplace(self, df: "pd.DataFrame", *, inplace: bool) -> "Dataset":
+        if inplace:
+            self._df = df
+            return self
         else:
-            assert path.exists() and path.is_file(), f"Dataset {path} not found"
-            ds_id = get_dataset_local_id(path)
-            dest_dir = URIM_HOME / "datasets"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest_dir / f"{ds_id}.jsonl")
-
-        return cls.load_from_id(ds_id)
-
-    @classmethod
-    def load_from_hf(cls, name: str, subset: str | None = None, **kwargs: Any) -> tuple[str, Self]:
-        ds_id = get_hf_dataset_local_id(name=name, subset=subset, **kwargs)
-        if not cls.is_valid_id(ds_id):
-            ds = cast(HFDataset, load_dataset(name, subset, **kwargs))
-            ds.to_json(URIM_HOME / "datasets" / f"{ds_id}.jsonl", orient="records", lines=True)
-
-        assert cls.is_valid_id(ds_id)
-        return cls.load_from_id(ds_id)
-
-    @classmethod
-    def load(
-        cls,
-        name: str,
-        *,
-        data_dir: str | None = None,
-        cache_dir: str | None = None,
-        token: str | None = None,
-        split: str = "train",
-        num_proc: int | None = None,
-        subset: str | None = None,
-        **kwargs: Any,
-    ) -> tuple[str, Self]:
-        path = Path(name)
-        if cls.is_valid_id(name):
-            return cls.load_from_id(name)
-        elif path.exists() and path.is_file():
-            return cls.load_from_local(path)
-        else:
-            return cls.load_from_hf(
-                name,
-                subset=subset,
-                data_dir=data_dir,
-                cache_dir=cache_dir,
-                token=token,
-                split=split,
-                num_proc=num_proc,
-                **kwargs,
-            )
-
-    def _execute_describe_fn(self, serialized_fn: str) -> Self:
-        parts = serialized_fn.split("|")
-        assert len(parts) > 0, f"Invalid function call: {serialized_fn}"
-
-        fn_name = parts[0].strip()
-        kwargs: dict[str, Any] = {}
-        for part in parts[1:]:
-            kwargs_parts = part.split("=")
-            key, value = kwargs_parts[0].strip(), kwargs_parts[1].strip()
-            if fn_name == "sample" and key == "n":
-                kwargs["n"] = int(value)
-            elif fn_name == "sample" and key == "frac":
-                kwargs["frac"] = float(value)
-            else:
-                kwargs[key] = value
-
-        if fn_name == "sample":
-            self.sample(**kwargs)
-        elif fn_name == "rename":
-            self.rename(**kwargs)
-        elif fn_name == "drop":
-            self.drop(**kwargs)
-        elif fn_name == "filter":
-            self.filter(**kwargs)
-        elif fn_name == "apply":
-            self.apply(**kwargs)
-
-        return self
+            return Dataset(df)

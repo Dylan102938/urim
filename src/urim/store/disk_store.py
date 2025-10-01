@@ -64,6 +64,10 @@ class DiskStore(Store):
             to_drop = self._page.iloc[:overflow].index
             self._page.drop(index=to_drop, inplace=True)
 
+    def remove(self, key: str) -> None:
+        with self._lock:
+            self._page.drop(index=key, errors="ignore", inplace=True)
+
     def flush(self) -> None:
         with self._flush_lock:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
