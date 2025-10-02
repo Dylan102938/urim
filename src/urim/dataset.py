@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping
 from pathlib import Path
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from urim.ai.question import Question
+
+QuestionFactory = Callable[["pd.Series"], "Question"] | str
 
 PRESET_FAST = "gpt-4.1-mini"
 PRESET_BALANCED = "gpt-4.1"
@@ -37,16 +41,17 @@ def extract_op_kwargs(
             rows = curr_df
         else:
             rows = curr_df.iloc[:: len(curr_df) // 5]
-        prompt = template.format({"head": rows.head(), **kwargs})
+        prompt = template.format(**{"head": rows.head(), **kwargs})
     else:
         prompt = template.format(**kwargs)
 
     for _ in range(3):
+        question: ExtractJSON
         try:
             question = ExtractJSON(prompt, **(question_kwargs or {}))
             return question.json(model)
         except Exception:
-            pass
+            question.remove_from_cache(model)
 
     raise Exception("Failed to extract kwargs")
 
@@ -66,22 +71,23 @@ def extract_op_fn(
             rows = curr_df
         else:
             rows = curr_df.iloc[:: len(curr_df) // 5]
-        prompt = template.format({"head": rows.head(), **kwargs})
+        prompt = template.format(**{"head": rows.head(), **kwargs})
     else:
         prompt = template.format(**kwargs)
 
     for _ in range(3):
+        question: ExtractFunction
         try:
             question = ExtractFunction(prompt, **(question_kwargs or {}))
             return question.fn(model)
         except Exception:
-            pass
+            question.remove_from_cache(model)
 
     raise Exception("Failed to extract fn")
 
 
 class Dataset:
-    def __init__(self, dataset: "pd.DataFrame" | str, **kwargs: Any):
+    def __init__(self, dataset: pd.DataFrame | str, **kwargs: Any):
         import pandas as pd
         from datasets import load_dataset
 
@@ -96,7 +102,7 @@ class Dataset:
 
         self._init_dataset_kwargs = kwargs
 
-    def df(self) -> "pd.DataFrame":
+    def df(self) -> pd.DataFrame:
         return self._df
 
     def to_json(self, out_path: str | Path) -> None:
@@ -110,7 +116,7 @@ class Dataset:
         *,
         inplace: bool = False,
         **kwargs: Any,
-    ) -> "Dataset":
+    ) -> Dataset:
         df = self._df.sample(n=n, frac=frac, **kwargs)
         return self._maybe_inplace(df, inplace=inplace)
 
@@ -121,23 +127,30 @@ class Dataset:
         model: str = PRESET_FAST,
         *,
         inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> "Dataset":
-        assert columns is not None or hint is not None, (
-            "Must provide a hint if no columns are provided"
-        )
+    ) -> Dataset:
+        assert (
+            columns is not None or hint is not None
+        ), "Must provide a hint if no columns are provided"
 
         if columns is None:
             assert hint is not None
             kwargs = {
                 **kwargs,
-                **extract_op_kwargs(
+                "columns": extract_op_kwargs(
                     DATASET_RENAME_PROMPT,
                     columns=", ".join(self._df.columns),
                     scheme=hint,
                     model=model,
                     curr_df=self._df,
+                    question_kwargs=question_kwargs,
                 ),
+            }
+        else:
+            kwargs = {
+                "columns": columns,
+                **kwargs,
             }
 
         df = self._df.rename(**kwargs)
@@ -150,8 +163,9 @@ class Dataset:
         model: str = PRESET_FAST,
         *,
         inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> "Dataset":
+    ) -> Dataset:
         assert columns is not None or hint is not None, "Must provide either columns or hint"
 
         if columns is None:
@@ -163,7 +177,13 @@ class Dataset:
                     scheme=hint,
                     model=model,
                     curr_df=self._df,
+                    question_kwargs=question_kwargs,
                 ),
+            }
+        else:
+            kwargs = {
+                "columns": columns,
+                **kwargs,
             }
 
         df = self._df.drop(**kwargs)
@@ -176,23 +196,22 @@ class Dataset:
         model: str = PRESET_BALANCED,
         *,
         inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> "Dataset":
+    ) -> Dataset:
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
         if fn is None:
-            kwargs = {
-                **kwargs,
-                **extract_op_kwargs(
-                    DATASET_FILTER_PROMPT,
-                    columns=", ".join(self._df.columns),
-                    scheme=hint,
-                    model=model,
-                    curr_df=self._df,
-                ),
-            }
+            fn = extract_op_fn(
+                DATASET_FILTER_PROMPT,
+                columns=", ".join(self._df.columns),
+                scheme=hint,
+                model=model,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
+            )
 
-        df = self._df.filter(**kwargs)
+        df = self._df[self._df.apply(fn, axis=1, **kwargs)]
         return self._maybe_inplace(df, inplace=inplace)
 
     def apply(
@@ -203,8 +222,9 @@ class Dataset:
         model: str = PRESET_BALANCED,
         *,
         inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> "Dataset":
+    ) -> Dataset:
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
         if fn is None:
@@ -215,8 +235,8 @@ class Dataset:
                 scheme=hint,
                 model=model,
                 curr_df=self._df,
+                question_kwargs=question_kwargs,
             )
-
             column, fn = wrapper_fn()
 
         df = self._df.copy()
@@ -230,13 +250,17 @@ class Dataset:
         messages_col: str | None = None,
         system_col: str | None = None,
         out_col: str | None = None,
-        question_type: type["Question"] = FreeForm,
+        question_type: type[Question] = FreeForm,
         model: str = PRESET_BALANCED,
+        *,
+        judges: dict[str, QuestionFactory] | None = None,
         max_workers: int = 100,
         inplace: bool = False,
         **question_kwargs: Any,
-    ) -> "Dataset":
+    ) -> Dataset:
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from urim.ai.question import Question, Rating
 
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
@@ -266,12 +290,11 @@ class Dataset:
                 )
             )
 
-        num_questions = len(questions)
-        results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
-
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            num_questions = len(questions)
+            results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
             future_to_index = {
-                executor.submit(question.resolve, model): idx
+                executor.submit(question.resolve, model, flush_cache=False): idx
                 for idx, question in enumerate(questions)
             }
 
@@ -281,6 +304,8 @@ class Dataset:
                     results[idx] = future.result()
                 except Exception as exc:
                     results[idx] = ("", {"error": str(exc)})
+
+            Question.flush_cache(model)
 
         df = self._df.copy()
         df[out_col] = [result[0] for result in results]
@@ -293,11 +318,54 @@ class Dataset:
         for k, v in extra_columns.items():
             df[k] = v
 
+        if judges is None:
+            return self._maybe_inplace(df, inplace=inplace)
+
+        judge_questions: dict[str, list[Question]] = defaultdict(list)
+        for row in df.iterrows():
+            for k, factory in judges.items():
+                judge_questions[k].append(
+                    Rating(factory.format(**row.to_dict()))
+                    if isinstance(factory, str)
+                    else factory(row)
+                )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            judge_results: dict[str, list[tuple[Any, dict]]] = {
+                k: [("", {}) for _ in range(len(questions))]
+                for k, questions in judge_questions.items()
+            }
+            judge_futures = {
+                executor.submit(question.resolve, PRESET_BALANCED): (k, idx)
+                for k, questions in judge_questions.items()
+                for idx, question in enumerate(questions)
+            }
+
+            for future in as_completed(judge_futures):
+                k, idx = judge_futures[future]
+                try:
+                    judge_results[k][idx] = future.result()
+                except Exception as exc:
+                    judge_results[k][idx] = ("", {"error": str(exc)})
+
+            Question.flush_cache(PRESET_BALANCED)
+
+        for k, results in judge_results.items():
+            df[k] = [result[0] for result in results]
+
+            extra_columns = defaultdict(list)
+            for extra in [result[1] for result in results]:
+                for extra_k, v in extra.items():
+                    extra_columns[extra_k].append(v)
+
+            for extra_k, v in extra_columns.items():
+                df[f"{k}_{extra_k}"] = v
+
         return self._maybe_inplace(df, inplace=inplace)
 
     def concatenate(
-        self, other: "Dataset" | list["Dataset"], *, inplace: bool = False, **kwargs: Any
-    ) -> "Dataset":
+        self, other: Dataset | list[Dataset], *, inplace: bool = False, **kwargs: Any
+    ) -> Dataset:
         import pandas as pd
 
         if not isinstance(other, list):
@@ -307,7 +375,7 @@ class Dataset:
             pd.concat([self._df, *[ds._df for ds in other]], axis=0, **kwargs), inplace=inplace
         )
 
-    def _maybe_inplace(self, df: "pd.DataFrame", *, inplace: bool) -> "Dataset":
+    def _maybe_inplace(self, df: pd.DataFrame, *, inplace: bool) -> Dataset:
         if inplace:
             self._df = df
             return self

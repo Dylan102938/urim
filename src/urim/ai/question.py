@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import ast
-import hashlib
-import inspect
-import json
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
-from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
 from urim.env import URIM_HOME
 from urim.logging_utils import logger
-from urim.store.base import Store
 from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
@@ -25,6 +19,8 @@ _caches: dict[str, DiskStore] = {}
 
 
 def _to_hashable(value: Any) -> Any:
+    import inspect
+
     if value is None or isinstance(value, bool | int | float | str):
         return value
     if isinstance(value, Question):
@@ -71,6 +67,9 @@ class Question(ABC, Generic[EvalType]):
         return str(self)
 
     def hash(self) -> str:
+        import hashlib
+        import json
+
         ignore_fields = {"enable_cache", "cache_dir"}
         semantic = {k: v for k, v in self.__dict__.items() if k not in ignore_fields}
         semantic["__type__"] = self.__class__.__name__
@@ -80,7 +79,13 @@ class Question(ABC, Generic[EvalType]):
 
         return hashlib.sha256(json_str.encode()).hexdigest()
 
-    def resolve(self, model: str) -> QuestionResult[EvalType]:
+    def resolve(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
+        """Resolves the question with a response from the specified model.
+
+        Cache is automatically flushed when the question is resolved. If you don't want this to
+        happen, set `flush_cache` to `False` and manually flush the cache to persist the result.
+        """
+
         result: QuestionResult[EvalType] | None = None
         if self.enable_cache:
             cache = self.get_model_cache(model)
@@ -90,12 +95,14 @@ class Question(ABC, Generic[EvalType]):
             result = self.fetch(model)
             if self.enable_cache:
                 cache.put(self.hash(), result)
+                if flush_cache:
+                    cache.flush()
 
         logger.debug(f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}")
 
         return result
 
-    def get_model_cache(self, model: str) -> Store:
+    def get_model_cache(self, model: str) -> DiskStore:
         with _make_cache_lock:
             if model not in _caches:
                 logger.info(f"Creating cache for model: {model}")
@@ -106,7 +113,17 @@ class Question(ABC, Generic[EvalType]):
     def remove_from_cache(self, model: str) -> None:
         with _make_cache_lock:
             if model in _caches:
-                _caches[model].remove(self.hash())
+                return
+
+            _caches[model].remove(self.hash())
+
+    @classmethod
+    def flush_cache(cls, model: str) -> None:
+        with _make_cache_lock:
+            if model not in _caches:
+                return
+
+            _caches[model].flush()
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:
@@ -116,6 +133,8 @@ class Question(ABC, Generic[EvalType]):
 
 class FreeForm(Question[str]):
     def fetch(self, model: str) -> QuestionResult[str]:
+        from urim.ai.client import LLM
+
         messages = self.resolve_to_messages()
         completion = LLM().chat_completion(model, messages=messages, **self.kwargs)
         return (completion.content or "", {})
@@ -147,7 +166,12 @@ class ExtractJSON(FreeForm):
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def json(self, model: str) -> dict:
+        import json
+
         result, _ = self.resolve(model)
+        if result.startswith("```json") and result.endswith("```"):
+            result = result[len("```json") : -len("```")]
+
         return json.loads(result)
 
 
@@ -166,6 +190,9 @@ class ExtractFunction(FreeForm):
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def fn(self, model: str) -> Callable[..., Any]:
+        import ast
+        import inspect
+
         result, _ = super().resolve(model)
         if result.startswith("```python") and result.endswith("```"):
             result = result[len("```python") : -len("```")]
@@ -204,6 +231,8 @@ class Rating(Question[float]):
         self.refusal_threshold = refusal_threshold
 
     def fetch(self, model: str) -> QuestionResult[float]:
+        from urim.ai.client import LLM
+
         completion = LLM().chat_completion(
             model,
             messages=self.messages,
@@ -215,9 +244,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert completion.top_tokens is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"
@@ -257,6 +286,8 @@ class NextToken(Question):
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
 
     def fetch(self, model: str) -> QuestionResult[str]:
+        from urim.ai.client import LLM
+
         completion = LLM().chat_completion(
             model,
             messages=self.messages,
