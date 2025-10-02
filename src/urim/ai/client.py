@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import math
 import os
 from dataclasses import dataclass
@@ -12,8 +11,6 @@ from dotenv import load_dotenv
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
-
-LOGGER = logging.getLogger("urim.core.ai.client")
 
 load_dotenv()
 

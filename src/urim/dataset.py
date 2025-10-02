@@ -260,6 +260,8 @@ class Dataset:
     ) -> Dataset:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        from tqdm.auto import tqdm
+
         from urim.ai.question import Question, Rating
 
         question_col = question_col or "question"
@@ -267,9 +269,9 @@ class Dataset:
         system_col = system_col or "system"
         out_col = out_col or "answer"
 
-        assert question_col is not None or messages_col is not None
-
-        input_col = messages_col or question_col
+        input_col = (question_col in self._df.columns and question_col) or (
+            messages_col in self._df.columns and messages_col
+        )
 
         assert input_col in self._df.columns
 
@@ -298,7 +300,7 @@ class Dataset:
                 for idx, question in enumerate(questions)
             }
 
-            for future in as_completed(future_to_index):
+            for future in tqdm(as_completed(future_to_index), total=num_questions, leave=False):
                 idx = future_to_index[future]
                 try:
                     results[idx] = future.result()
@@ -322,10 +324,10 @@ class Dataset:
             return self._maybe_inplace(df, inplace=inplace)
 
         judge_questions: dict[str, list[Question]] = defaultdict(list)
-        for row in df.iterrows():
+        for _, row in df.iterrows():
             for k, factory in judges.items():
                 judge_questions[k].append(
-                    Rating(factory.format(**row.to_dict()))
+                    Rating(prompt=factory.format(**row.to_dict()), **question_kwargs)
                     if isinstance(factory, str)
                     else factory(row)
                 )
@@ -336,12 +338,12 @@ class Dataset:
                 for k, questions in judge_questions.items()
             }
             judge_futures = {
-                executor.submit(question.resolve, PRESET_BALANCED): (k, idx)
+                executor.submit(question.resolve, PRESET_BALANCED, flush_cache=False): (k, idx)
                 for k, questions in judge_questions.items()
                 for idx, question in enumerate(questions)
             }
 
-            for future in as_completed(judge_futures):
+            for future in tqdm(as_completed(judge_futures), total=len(judge_futures), leave=False):
                 k, idx = judge_futures[future]
                 try:
                     judge_results[k][idx] = future.result()

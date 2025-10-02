@@ -8,7 +8,6 @@ from typing import Any, Generic, TypeVar
 
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
 from urim.env import URIM_HOME
-from urim.logging_utils import logger
 from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
@@ -98,14 +97,11 @@ class Question(ABC, Generic[EvalType]):
                 if flush_cache:
                     cache.flush()
 
-        logger.debug(f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}")
-
         return result
 
     def get_model_cache(self, model: str) -> DiskStore:
         with _make_cache_lock:
             if model not in _caches:
-                logger.info(f"Creating cache for model: {model}")
                 _caches[model] = DiskStore(Path(self.cache_dir) / f"{model}.jsonl")
 
             return _caches[model]
