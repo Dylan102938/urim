@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import ast
-import hashlib
-import inspect
-import json
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
-
-from urim.ai.client import LLM
 from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
 from urim.env import URIM_HOME
 from urim.logging_utils import logger
-from urim.store.base import Store
 from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
@@ -27,12 +19,12 @@ _caches: dict[str, DiskStore] = {}
 
 
 def _to_hashable(value: Any) -> Any:
+    import inspect
+
     if value is None or isinstance(value, bool | int | float | str):
         return value
     if isinstance(value, Question):
         return {"question_type": value.__class__.__name__, "hash": value.hash()}
-    if isinstance(value, QuestionFactory):
-        return {"question_factory": value.model_dump()}
     if isinstance(value, dict):
         return {str(k): _to_hashable(v) for k, v in sorted(value.items(), key=lambda x: str(x[0]))}
     if isinstance(value, list | tuple | set):
@@ -45,43 +37,6 @@ def _to_hashable(value: Any) -> Any:
         return {"callable": src}
 
     return value
-
-
-class QuestionFactory(BaseModel):
-    type: type[Question] = Field(default_factory=lambda: FreeForm, exclude=True)
-    prompt: str | None = None
-    messages: list[dict] | None = None
-    system: str | None = None
-    enable_cache: bool = True
-    cache_dir: str | None = None
-    kwargs: dict[str, Any] = {}
-
-    def resolve(self, **fill_prompt_kwargs: Any) -> Question:
-        prompt = self.prompt
-        system = self.system
-        messages = self.messages
-
-        if prompt is not None:
-            prompt = prompt.format(**fill_prompt_kwargs)
-        if system is not None:
-            system = system.format(**fill_prompt_kwargs)
-        if messages is not None:
-            messages = [
-                {
-                    "role": m["role"],
-                    "content": m["content"].format(**fill_prompt_kwargs),
-                }
-                for m in messages
-            ]
-
-        return self.type(
-            prompt=prompt,
-            messages=messages,
-            system=system,
-            enable_cache=self.enable_cache,
-            cache_dir=self.cache_dir,
-            **self.kwargs,
-        )
 
 
 class Question(ABC, Generic[EvalType]):
@@ -112,6 +67,9 @@ class Question(ABC, Generic[EvalType]):
         return str(self)
 
     def hash(self) -> str:
+        import hashlib
+        import json
+
         ignore_fields = {"enable_cache", "cache_dir"}
         semantic = {k: v for k, v in self.__dict__.items() if k not in ignore_fields}
         semantic["__type__"] = self.__class__.__name__
@@ -121,7 +79,13 @@ class Question(ABC, Generic[EvalType]):
 
         return hashlib.sha256(json_str.encode()).hexdigest()
 
-    def resolve(self, model: str) -> QuestionResult[EvalType]:
+    def resolve(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
+        """Resolves the question with a response from the specified model.
+
+        Cache is automatically flushed when the question is resolved. If you don't want this to
+        happen, set `flush_cache` to `False` and manually flush the cache to persist the result.
+        """
+
         result: QuestionResult[EvalType] | None = None
         if self.enable_cache:
             cache = self.get_model_cache(model)
@@ -131,20 +95,35 @@ class Question(ABC, Generic[EvalType]):
             result = self.fetch(model)
             if self.enable_cache:
                 cache.put(self.hash(), result)
+                if flush_cache:
+                    cache.flush()
 
         logger.debug(f"model={model}\nquestion={self.prompt or self.messages}\nanswer={result[0]}")
 
         return result
 
-    def get_model_cache(self, model: str) -> Store:
+    def get_model_cache(self, model: str) -> DiskStore:
         with _make_cache_lock:
             if model not in _caches:
                 logger.info(f"Creating cache for model: {model}")
-                _caches[model] = DiskStore(
-                    Path(self.cache_dir) / model,
-                )
+                _caches[model] = DiskStore(Path(self.cache_dir) / f"{model}.jsonl")
 
             return _caches[model]
+
+    def remove_from_cache(self, model: str) -> None:
+        with _make_cache_lock:
+            if model in _caches:
+                return
+
+            _caches[model].remove(self.hash())
+
+    @classmethod
+    def flush_cache(cls, model: str) -> None:
+        with _make_cache_lock:
+            if model not in _caches:
+                return
+
+            _caches[model].flush()
 
     @abstractmethod
     def fetch(self, model: str) -> QuestionResult[EvalType]:
@@ -153,42 +132,23 @@ class Question(ABC, Generic[EvalType]):
 
 
 class FreeForm(Question[str]):
-    def __init__(
-        self,
-        *args: Any,
-        judges: dict[str, tuple[QuestionFactory, str]] | None = None,
-        judge_kwargs: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self.judges = judges
-        self.judge_kwargs = judge_kwargs or {}
-
     def fetch(self, model: str) -> QuestionResult[str]:
+        from urim.ai.client import LLM
+
+        messages = self.resolve_to_messages()
+        completion = LLM().chat_completion(model, messages=messages, **self.kwargs)
+        return (completion.content or "", {})
+
+    def resolve_to_messages(self) -> list[dict]:
         if self.messages is None:
             assert self.prompt is not None, "Must provide either messages or prompt"
             messages = [{"role": "user", "content": self.prompt}]
             if self.system is not None:
                 messages.insert(0, {"role": "system", "content": self.system})
-        else:
-            messages = self.messages
 
-        completion = LLM().chat_completion(model, messages=messages, **self.kwargs)
+            return messages
 
-        judge_results: dict[str, str | int | float | bool] = {}
-        if self.judges is not None:
-            for judge_name, (judge, judge_model) in self.judges.items():
-                judge_factory_kwargs = {
-                    **self.judge_kwargs,
-                    "prompt": self.prompt,
-                    "messages": self.messages,
-                    "answer": completion.content or "",
-                }
-                judge_q = judge.resolve(**judge_factory_kwargs)
-                judge_result, _ = judge_q.resolve(judge_model)
-                judge_results[judge_name] = judge_result
-
-        return (completion.content or "", judge_results)
+        return self.messages
 
 
 class ExtractJSON(FreeForm):
@@ -206,7 +166,12 @@ class ExtractJSON(FreeForm):
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def json(self, model: str) -> dict:
+        import json
+
         result, _ = self.resolve(model)
+        if result.startswith("```json") and result.endswith("```"):
+            result = result[len("```json") : -len("```")]
+
         return json.loads(result)
 
 
@@ -225,6 +190,9 @@ class ExtractFunction(FreeForm):
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
     def fn(self, model: str) -> Callable[..., Any]:
+        import ast
+        import inspect
+
         result, _ = super().resolve(model)
         if result.startswith("```python") and result.endswith("```"):
             result = result[len("```python") : -len("```")]
@@ -263,6 +231,8 @@ class Rating(Question[float]):
         self.refusal_threshold = refusal_threshold
 
     def fetch(self, model: str) -> QuestionResult[float]:
+        from urim.ai.client import LLM
+
         completion = LLM().chat_completion(
             model,
             messages=self.messages,
@@ -274,9 +244,9 @@ class Rating(Question[float]):
             convert_to_probs=True,
         )
 
-        assert completion.top_tokens is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         score = self._agg_score(completion.top_tokens)
         assert score is not None, "No valid score found"
@@ -316,6 +286,8 @@ class NextToken(Question):
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
 
     def fetch(self, model: str) -> QuestionResult[str]:
+        from urim.ai.client import LLM
+
         completion = LLM().chat_completion(
             model,
             messages=self.messages,
@@ -327,4 +299,4 @@ class NextToken(Question):
             convert_to_probs=True,
         )
 
-        return completion.content or "", {"probs": completion.top_tokens}
+        return completion.content or "", {"raw": completion.top_tokens}

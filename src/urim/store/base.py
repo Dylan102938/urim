@@ -14,3 +14,6 @@ class Store(ABC):
 
     @abstractmethod
     def put(self, key: str, value: Any) -> None: ...
+
+    @abstractmethod
+    def remove(self, key: str) -> None: ...
