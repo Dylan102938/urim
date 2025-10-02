@@ -22,11 +22,8 @@ classifiers = [
 ]
 # Minimal runtime deps; expand as features land
 dependencies = [
-  "typer>=0.12",
-  "rich>=13.7",
   "openai>=1.40",
   "backoff>=2.2.1",
-  "readerwriterlock>=1.0.9",
   "pandas>=2.0",
   "datasets>=2.19",
   "python-dotenv>=1.1.1",
