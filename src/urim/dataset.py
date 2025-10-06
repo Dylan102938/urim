@@ -115,6 +115,12 @@ class Dataset:
 
         return int.from_bytes(hasher.digest(length=16), "big")
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Dataset):
+            return False
+
+        return hash(self) == hash(other)
+
     def df(self) -> pd.DataFrame:
         return self._df
 
