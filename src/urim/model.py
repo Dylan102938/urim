@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import Self
 
 from urim.store.disk_store import DiskStore
 
