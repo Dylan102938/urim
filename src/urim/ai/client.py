@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import backoff
 import openai
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 load_dotenv()
 
@@ -54,6 +56,8 @@ class LLM:
         )
 
     async def _build_client(self, model: str) -> AsyncOpenAI:
+        from openai import AsyncOpenAI
+
         from urim.env import collect_openai_keys
 
         openai_keys = collect_openai_keys(explicit_key=self.api_key)
