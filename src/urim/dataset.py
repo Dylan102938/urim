@@ -1,18 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-from urim.ai.prompts import (
-    DATASET_APPLY_PROMPT,
-    DATASET_DROP_NO_HINT_PROMPT,
-    DATASET_DROP_WITH_HINT_PROMPT,
-    DATASET_FILTER_PROMPT,
-    DATASET_RENAME_PROMPT,
-)
-from urim.ai.question import FreeForm
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -26,7 +18,7 @@ PRESET_BALANCED = "gpt-4.1"
 PRESET_THOROUGH = "gpt-5"
 
 
-def extract_op_kwargs(
+async def extract_op_kwargs(
     template: str,
     model: str,
     *,
@@ -49,14 +41,14 @@ def extract_op_kwargs(
         question: ExtractJSON
         try:
             question = ExtractJSON(prompt, **(question_kwargs or {}))
-            return question.json(model)
+            return await question.json(model)
         except Exception:
             question.remove_from_cache(model)
 
     raise Exception("Failed to extract kwargs")
 
 
-def extract_op_fn(
+async def extract_op_fn(
     template: str,
     model: str,
     *,
@@ -79,7 +71,7 @@ def extract_op_fn(
         question: ExtractFunction
         try:
             question = ExtractFunction(prompt, **(question_kwargs or {}))
-            return question.fn(model)
+            return await question.fn(model)
         except Exception:
             question.remove_from_cache(model)
 
@@ -102,6 +94,27 @@ class Dataset:
 
         self._init_dataset_kwargs = kwargs
 
+    def __hash__(self) -> int:
+        import numpy as np
+        from blake3 import blake3
+        from pandas.util import hash_pandas_object
+
+        hasher = blake3()
+        df = self._df.reindex(sorted(self._df.columns), axis=1)
+
+        for key, mul in [
+            ("0123456789ABCDEF", 0x9E3779B97F4A7C15),
+            ("23456789ABCDEFGH", 0xBF58476D1CE4E5B9),
+        ]:
+            h = hash_pandas_object(df, index=False, hash_key=key).to_numpy(np.uint64)
+            s = int(h.sum(dtype=np.uint64))
+            sw = int((h * np.uint64(mul)).sum(dtype=np.uint64))
+
+            hasher.update(s.to_bytes(8, "big", signed=False))
+            hasher.update(sw.to_bytes(8, "big", signed=False))
+
+        return int.from_bytes(hasher.digest(length=16), "big")
+
     def df(self) -> pd.DataFrame:
         return self._df
 
@@ -120,7 +133,7 @@ class Dataset:
         df = self._df.sample(n=n, frac=frac, **kwargs)
         return self._maybe_inplace(df, inplace=inplace)
 
-    def rename(
+    async def rename(
         self,
         columns: Mapping[Any, Hashable] | None = None,
         hint: str | None = None,
@@ -130,15 +143,13 @@ class Dataset:
         question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Dataset:
-        assert (
-            columns is not None or hint is not None
-        ), "Must provide a hint if no columns are provided"
+        from urim.ai.prompts import DATASET_RENAME_PROMPT
 
         if columns is None:
             assert hint is not None
             kwargs = {
                 **kwargs,
-                "columns": extract_op_kwargs(
+                "columns": await extract_op_kwargs(
                     DATASET_RENAME_PROMPT,
                     columns=", ".join(self._df.columns),
                     scheme=hint,
@@ -156,7 +167,7 @@ class Dataset:
         df = self._df.rename(**kwargs)
         return self._maybe_inplace(df, inplace=inplace)
 
-    def drop(
+    async def drop(
         self,
         columns: list[str] | str | None = None,
         hint: str | None = None,
@@ -166,19 +177,25 @@ class Dataset:
         question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Dataset:
+        from urim.ai.prompts import (
+            DATASET_DROP_NO_HINT_PROMPT,
+            DATASET_DROP_WITH_HINT_PROMPT,
+        )
+
         assert columns is not None or hint is not None, "Must provide either columns or hint"
 
         if columns is None:
+            add_kwargs = await extract_op_kwargs(
+                DATASET_DROP_WITH_HINT_PROMPT if hint else DATASET_DROP_NO_HINT_PROMPT,
+                columns=", ".join(self._df.columns),
+                scheme=hint,
+                model=model,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
+            )
             kwargs = {
                 **kwargs,
-                **extract_op_kwargs(
-                    DATASET_DROP_WITH_HINT_PROMPT if hint else DATASET_DROP_NO_HINT_PROMPT,
-                    columns=", ".join(self._df.columns),
-                    scheme=hint,
-                    model=model,
-                    curr_df=self._df,
-                    question_kwargs=question_kwargs,
-                ),
+                **add_kwargs,
             }
         else:
             kwargs = {
@@ -189,7 +206,7 @@ class Dataset:
         df = self._df.drop(**kwargs)
         return self._maybe_inplace(df, inplace=inplace)
 
-    def filter(
+    async def filter(
         self,
         fn: Callable[[pd.Series], bool] | None = None,
         hint: str | None = None,
@@ -199,10 +216,12 @@ class Dataset:
         question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Dataset:
+        from urim.ai.prompts import DATASET_FILTER_PROMPT
+
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
         if fn is None:
-            fn = extract_op_fn(
+            fn = await extract_op_fn(
                 DATASET_FILTER_PROMPT,
                 columns=", ".join(self._df.columns),
                 scheme=hint,
@@ -211,10 +230,10 @@ class Dataset:
                 question_kwargs=question_kwargs,
             )
 
-        df = self._df[self._df.apply(fn, axis=1, **kwargs)]
+        df = self._df.loc[self._df.apply(fn, axis=1, **kwargs), :]
         return self._maybe_inplace(df, inplace=inplace)
 
-    def apply(
+    async def apply(
         self,
         fn: Callable[[pd.Series], bool] | None = None,
         column: str | None = None,
@@ -225,10 +244,12 @@ class Dataset:
         question_kwargs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Dataset:
+        from urim.ai.prompts import DATASET_APPLY_PROMPT
+
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
         if fn is None:
-            wrapper_fn = extract_op_fn(
+            wrapper_fn = await extract_op_fn(
                 DATASET_APPLY_PROMPT,
                 columns=", ".join(self._df.columns),
                 column_hint=f"The column's name should be {column}." if column is not None else "",
@@ -244,13 +265,13 @@ class Dataset:
 
         return self._maybe_inplace(df, inplace=inplace)
 
-    def generate(
+    async def generate(
         self,
         question_col: str | None = None,
         messages_col: str | None = None,
         system_col: str | None = None,
         out_col: str | None = None,
-        question_type: type[Question] = FreeForm,
+        question_type: type[Question] | None = None,
         model: str = PRESET_BALANCED,
         *,
         judges: dict[str, QuestionFactory] | None = None,
@@ -258,11 +279,9 @@ class Dataset:
         inplace: bool = False,
         **question_kwargs: Any,
     ) -> Dataset:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from urim.ai.question import FreeForm, Rating
 
-        from tqdm.auto import tqdm
-
-        from urim.ai.question import Question, Rating
+        ### Generate questions using dataframes and defaults ###
 
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
@@ -277,6 +296,7 @@ class Dataset:
 
         input_iter = self._df[input_col].to_list()
         questions: list[Question] = []
+        question_type = question_type or FreeForm
         for i, inp in enumerate(input_iter):
             common_system = question_kwargs.pop("system", None)
             system = (
@@ -284,31 +304,23 @@ class Dataset:
                 if system_col in self._df.columns
                 else common_system
             )
+            question_input: dict[str, Any]
+            if input_col == messages_col:
+                question_input = {"messages": inp}
+            else:
+                question_input = {"prompt": inp}
+
             questions.append(
                 question_type(
-                    prompt=inp,  # TODO: fix bug here that only supports prompt vs messages
                     system=system,
+                    **question_input,
                     **question_kwargs,
                 )
             )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            num_questions = len(questions)
-            results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
-            future_to_index = {
-                executor.submit(question.resolve, model, flush_cache=False): idx
-                for idx, question in enumerate(questions)
-            }
+        ### Resolve questions and add to dataframe ###
 
-            for future in tqdm(as_completed(future_to_index), total=num_questions, leave=False):
-                idx = future_to_index[future]
-                try:
-                    results[idx] = future.result()
-                except Exception as exc:
-                    results[idx] = ("", {"error": str(exc)})
-
-            Question.flush_cache(model)
-
+        results = await self._resolve_questions(model, questions, max_workers)
         df = self._df.copy()
         df[out_col] = [result[0] for result in results]
 
@@ -323,6 +335,8 @@ class Dataset:
         if judges is None:
             return self._maybe_inplace(df, inplace=inplace)
 
+        ### Generate judge questions ###
+
         judge_questions: dict[str, list[Question]] = defaultdict(list)
         for _, row in df.iterrows():
             for k, factory in judges.items():
@@ -332,30 +346,13 @@ class Dataset:
                     else factory(row)
                 )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            judge_results: dict[str, list[tuple[Any, dict]]] = {
-                k: [("", {}) for _ in range(len(questions))]
-                for k, questions in judge_questions.items()
-            }
-            judge_futures = {
-                executor.submit(question.resolve, PRESET_BALANCED, flush_cache=False): (k, idx)
-                for k, questions in judge_questions.items()
-                for idx, question in enumerate(questions)
-            }
+        ### Resolve judge questions and add to dataframe ###
 
-            for future in tqdm(as_completed(judge_futures), total=len(judge_futures), leave=False):
-                k, idx = judge_futures[future]
-                try:
-                    judge_results[k][idx] = future.result()
-                except Exception as exc:
-                    judge_results[k][idx] = ("", {"error": str(exc)})
-
-            Question.flush_cache(PRESET_BALANCED)
-
+        judge_results = await self._resolve_judge_questions(model, judge_questions, max_workers)
         for k, results in judge_results.items():
             df[k] = [result[0] for result in results]
-
             extra_columns = defaultdict(list)
+
             for extra in [result[1] for result in results]:
                 for extra_k, v in extra.items():
                     extra_columns[extra_k].append(v)
@@ -383,3 +380,85 @@ class Dataset:
             return self
         else:
             return Dataset(df)
+
+    async def _resolve_questions(
+        self,
+        model: str,
+        questions: list[Question],
+        max_workers: int,
+    ) -> list[tuple[Any, dict]]:
+        from tqdm.auto import tqdm
+
+        from urim.ai.question import Question
+
+        semaphore = asyncio.Semaphore(max_workers)
+        num_questions = len(questions)
+        results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
+
+        async def _run_question(idx: int, question: Question) -> None:
+            async with semaphore:
+                try:
+                    results[idx] = await question.resolve(model, flush_cache=False)
+                except Exception as exc:
+                    results[idx] = ("", {"error": str(exc)})
+
+        tasks = [
+            asyncio.create_task(_run_question(idx, question))
+            for idx, question in enumerate(questions)
+        ]
+
+        for task in tqdm(
+            asyncio.as_completed(tasks),
+            total=num_questions,
+            leave=False,
+            desc=f"{model} - resolving questions",
+        ):
+            await task
+
+        await Question.flush_cache(model)
+
+        return results
+
+    async def _resolve_judge_questions(
+        self,
+        model: str,
+        judge_questions: dict[str, list[Question]],
+        max_workers: int,
+    ) -> dict[str, list[tuple[Any, dict]]]:
+        from tqdm.auto import tqdm
+
+        from urim.ai.question import Question
+
+        semaphore = asyncio.Semaphore(max_workers)
+        num_judge_questions = sum(len(questions) for questions in judge_questions.values())
+        judge_results: dict[str, list[tuple[Any, dict]]] = {
+            k: [("", {}) for _ in range(len(questions))] for k, questions in judge_questions.items()
+        }
+
+        async def _run_judge(label: str, idx: int, question: Question) -> None:
+            async with semaphore:
+                try:
+                    judge_results[label][idx] = await question.resolve(
+                        model,
+                        flush_cache=False,
+                    )
+                except Exception as exc:
+                    judge_results[label][idx] = ("", {"error": str(exc)})
+
+        judge_tasks = [
+            asyncio.create_task(_run_judge(label, idx, question))
+            for label, questions in judge_questions.items()
+            for idx, question in enumerate(questions)
+        ]
+
+        for task in tqdm(
+            asyncio.as_completed(judge_tasks),
+            total=num_judge_questions,
+            leave=False,
+            desc=f"{model} - resolving judge questions",
+        ):
+            await task
+
+        await Question.flush_cache(model)
+
+        return judge_results

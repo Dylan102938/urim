@@ -28,6 +28,7 @@ dependencies = [
   "datasets>=2.19",
   "python-dotenv>=1.1.1",
   "orjson>=3.11.2",
+  "blake3>=1.0.7",
 ]
 
 [project.scripts]
@@ -47,6 +48,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 addopts = "-q"
 testpaths = ["tests"]
 markers = [

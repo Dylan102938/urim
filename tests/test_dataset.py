@@ -56,18 +56,18 @@ def test_sample(dataset: Dataset, n_or_frac: int | float) -> None:
     assert len(df) == 2
 
 
-def test_rename_no_llm(dataset: Dataset) -> None:
-    ds = dataset.rename(columns={"a": "x"})
+async def test_rename_no_llm(dataset: Dataset) -> None:
+    ds = await dataset.rename(columns={"a": "x"})
     assert "x" in ds.df().columns and "a" not in ds.df().columns
 
-    ds = dataset.rename(columns={"a": "x", "b": "y"})
+    ds = await dataset.rename(columns={"a": "x", "b": "y"})
     assert "x" in ds.df().columns and "a" not in ds.df().columns
     assert "y" in ds.df().columns and "b" not in ds.df().columns
 
 
 @requires_llm
-def test_rename(dataset: Dataset) -> None:
-    ds = dataset.rename(
+async def test_rename(dataset: Dataset) -> None:
+    ds = await dataset.rename(
         hint="Rename a to x, b to y",
         question_kwargs={"enable_cache": False},
     )
@@ -75,20 +75,20 @@ def test_rename(dataset: Dataset) -> None:
     assert "y" in ds.df().columns and "b" not in ds.df().columns
 
 
-def test_drop_no_llm(dataset: Dataset) -> None:
+async def test_drop_no_llm(dataset: Dataset) -> None:
     ds = Dataset(dataset.df().copy())
-    ds = ds.drop(columns=["a"])
+    ds = await ds.drop(columns=["a"])
     assert "a" not in ds.df().columns
 
     ds = Dataset(dataset.df().copy())
-    ds = ds.drop(columns=["a", "b"])
+    ds = await ds.drop(columns=["a", "b"])
     assert "a" not in ds.df().columns
     assert "b" not in ds.df().columns
 
 
 @requires_llm
-def test_drop_with_llm(dataset: Dataset) -> None:
-    ds = dataset.drop(
+async def test_drop_with_llm(dataset: Dataset) -> None:
+    ds = await dataset.drop(
         hint="Drop a and b",
         question_kwargs={"enable_cache": False},
     )
@@ -96,14 +96,14 @@ def test_drop_with_llm(dataset: Dataset) -> None:
     assert "b" not in ds.df().columns
 
 
-def test_filter_no_llm(dataset: Dataset) -> None:
-    ds = dataset.filter(fn=lambda row: row["a"] > 20)
+async def test_filter_no_llm(dataset: Dataset) -> None:
+    ds = await dataset.filter(fn=lambda row: row["a"] > 20)
     assert len(ds.df()) == 2
 
 
 @requires_llm
-def test_filter_with_llm(dataset: Dataset) -> None:
-    ds = dataset.filter(
+async def test_filter_with_llm(dataset: Dataset) -> None:
+    ds = await dataset.filter(
         fn=None,
         hint="Filter a > 20",
         question_kwargs={"enable_cache": False},
@@ -111,15 +111,15 @@ def test_filter_with_llm(dataset: Dataset) -> None:
     assert len(ds.df()) == 2
 
 
-def test_apply_no_llm(dataset: Dataset) -> None:
-    ds = dataset.apply(fn=lambda row: row["a"] + row["b"], column="sum")
+async def test_apply_no_llm(dataset: Dataset) -> None:
+    ds = await dataset.apply(fn=lambda row: row["a"] + row["b"], column="sum")
     assert list(ds.df()["sum"]) == [110, 220, 330, 440]
 
 
 @requires_llm
-def test_apply_with_llm(dataset: Dataset) -> None:
+async def test_apply_with_llm(dataset: Dataset) -> None:
     ds = Dataset(dataset.df().copy())
-    ds = ds.apply(
+    ds = await ds.apply(
         column="sum",
         hint="create column sum = a + b",
         question_kwargs={"enable_cache": False},
@@ -136,9 +136,10 @@ def test_concat_no_llm(dataset: Dataset) -> None:
 
 
 @requires_llm
-def test_generate(tmp_path: Path) -> None:
-    ds = Dataset(dataset="tatsu-lab/alpaca", split="train").filter(fn=lambda row: row.name < 100)
-    ds.generate(
+async def test_generate(tmp_path: Path) -> None:
+    ds = Dataset(dataset="tatsu-lab/alpaca", split="train")
+    ds = await ds.filter(fn=lambda row: row.name < 100)
+    ds = await ds.generate(
         model="gpt-4.1-mini",
         question_col="instruction",
         judges={
