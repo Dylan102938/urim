@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,7 +54,9 @@ class LLM:
         )
 
     async def _build_client(self, model: str) -> AsyncOpenAI:
-        openai_keys = _collect_openai_keys(explicit_key=self.api_key)
+        from urim.env import collect_openai_keys
+
+        openai_keys = collect_openai_keys(explicit_key=self.api_key)
         openrouter_keys = [self.api_key or OPENROUTER_API_KEY]
         custom_keys = [self.api_key] if self.api_key else []
 
@@ -169,26 +170,6 @@ async def _test_client(client: AsyncOpenAI, model: str) -> bool:
         openai.AuthenticationError,
     ):
         return False
-
-
-def _collect_openai_keys(*, explicit_key: str | None = None) -> list[str]:
-    keys: list[str] = []
-    if explicit_key:
-        keys.append(explicit_key)
-    primary = os.environ.get("OPENAI_API_KEY")
-    if primary:
-        keys.append(primary)
-    for i in range(0, 10):
-        k = os.environ.get(f"OPENAI_API_KEY_{i}")
-        if k:
-            keys.append(k)
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for k in keys:
-        if k not in seen:
-            ordered.append(k)
-            seen.add(k)
-    return ordered
 
 
 def _prompt_to_messages(prompt: str) -> list[dict[str, str]]:
