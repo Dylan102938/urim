@@ -55,7 +55,8 @@ class DiskStore(Generic[K, V], Store[K, V]):
     def put(self, key: K, value: V) -> None:
         with self._lock:
             self._page.drop(index=key, errors="ignore", inplace=True)
-            self._page.loc[key, "value"] = value
+            # Set the entire row to avoid pandas trying to align dict keys to columns.
+            self._page.loc[key] = {"value": value}
 
             if not self.full():
                 return

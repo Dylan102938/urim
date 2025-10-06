@@ -6,12 +6,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Self
 
 from urim.ft.openai import OpenAIFineTuneJob, OpenAIFineTuneService
-from urim.store.disk_store import DiskStore
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from urim.dataset import Dataset
+    from urim.model import ModelRef
 
 RequestQueue = asyncio.PriorityQueue[tuple[float, int, "FineTuneRequest" | Literal["terminate"]]]
 
@@ -26,19 +24,19 @@ class FineTuneRequest:
     salt: str = field(default="")
     hyperparams: tuple[tuple[str, Hashable], ...] = field(default_factory=tuple)
 
-    def serialize(self, datasets_cache_dir: str | Path, cache_dataset: bool = True) -> str:
-        from pathlib import Path
-
+    def serialize(self, cache_dataset: bool = True) -> str:
         import orjson
 
-        cache_path = Path(datasets_cache_dir) / f"{hash(self.train_ds)}.jsonl"
+        from urim.env import storage_subdir
+
+        dsid = hash(self.train_ds)
         if cache_dataset:
-            self.train_ds.to_json(cache_path)
+            self.train_ds.to_json(storage_subdir("ft", "datasets") / f"{dsid}.jsonl")
 
         return orjson.dumps(
             {
                 "model_name": self.model_name,
-                "train_ds_path": cache_path.as_posix(),
+                "train_ds": dsid,
                 "learning_rate": self.learning_rate,
                 "batch_size": self.batch_size,
                 "n_epochs": self.n_epochs,
@@ -53,12 +51,15 @@ class FineTuneRequest:
         import orjson
 
         from urim.dataset import Dataset
+        from urim.env import storage_subdir
 
         obj = orjson.loads(serialized)
         hyperparams: dict[str, Hashable] = obj["hyperparams"]
+        ds_path = storage_subdir("ft", "datasets") / f"{obj['train_ds']}.jsonl"
+
         return cls(
             model_name=obj["model_name"],
-            train_ds=Dataset(obj["train_ds_path"]),
+            train_ds=Dataset(ds_path),
             learning_rate=obj["learning_rate"],
             batch_size=obj["batch_size"],
             n_epochs=obj["n_epochs"],
@@ -74,12 +75,11 @@ class FineTuneController:
         max_concurrent: int = 2,
         poll_status_interval: float = 60.0,
         retry_submission_interval: float = 40.0,
-        cache_dir: str | Path | None = None,
     ):
         from itertools import count
-        from pathlib import Path
 
-        from urim.env import URIM_HOME
+        from urim.env import storage_subdir
+        from urim.store.disk_store import DiskStore
 
         self.max_concurrent = max_concurrent
         self.poll_status_interval = poll_status_interval
@@ -95,12 +95,11 @@ class FineTuneController:
         self._status_poller: asyncio.Task | None = None
         self._stop_poller = asyncio.Event()
 
-        self._futures: dict[FineTuneRequest, asyncio.Future[OpenAIFineTuneJob]] = {}
+        self._futures: dict[FineTuneRequest, asyncio.Future[ModelRef]] = {}
         self._inflight: dict[FineTuneRequest, OpenAIFineTuneJob] = {}
-
-        cache_dir = Path(cache_dir or URIM_HOME / "ft")
-        self._datasets_cache_dir = cache_dir / "datasets"
-        self._inflight_store: DiskStore[str, str] = DiskStore(cache_dir / "inflight.jsonl")
+        self._inflight_store: DiskStore[str, str] = DiskStore(
+            storage_subdir("ft") / "inflight.jsonl"
+        )
 
     async def start(self) -> None:
         if self._submission_loop and self._retry_submission_loop and self._status_poller:
@@ -152,13 +151,13 @@ class FineTuneController:
 
     async def submit(
         self, request: FineTuneRequest, priority: float = 0.0
-    ) -> asyncio.Future[OpenAIFineTuneJob]:
+    ) -> asyncio.Future[ModelRef]:
         assert self._ready.is_set(), "Controller is not ready"
 
         if request in self._futures:
             return self._futures[request]
 
-        fut: asyncio.Future[OpenAIFineTuneJob] = asyncio.get_event_loop().create_future()
+        fut: asyncio.Future[ModelRef] = asyncio.get_event_loop().create_future()
         self._futures[request] = fut
         await self._queue.put((priority, next(self._queue_order), request))
 
@@ -186,7 +185,7 @@ class FineTuneController:
                 else:
                     self._inflight[request] = job
                     self._inflight_store.put(
-                        request.serialize(self._datasets_cache_dir, cache_dataset=True),
+                        request.serialize(cache_dataset=True),
                         job.serialize(),
                     )
                     await asyncio.to_thread(self._inflight_store.flush)
@@ -225,6 +224,7 @@ class FineTuneController:
 
     async def _poll_request(self, request: FineTuneRequest) -> None:
         from urim.ft.service import FineTuneJobStatus
+        from urim.model import ModelRef, get_ft_store
 
         stale_job = self._inflight[request]
         ft_service_key = stale_job.service_identifier
@@ -233,15 +233,34 @@ class FineTuneController:
 
         self._inflight[request] = job
         self._inflight_store.put(
-            request.serialize(self._datasets_cache_dir, cache_dataset=False),
+            request.serialize(cache_dataset=False),
             job.serialize(),
         )
         await asyncio.to_thread(self._inflight_store.flush)
 
         if job.status in (FineTuneJobStatus.COMPLETED, FineTuneJobStatus.FAILED):
-            self._futures[request].set_result(job)
+            future = self._futures.get(request)
+            if future is None or future.done():
+                return
+
+            if job.status == FineTuneJobStatus.COMPLETED:
+                model_ref = ModelRef(
+                    slug=next(mid for mid in job.model_ids if "ckpt-step-" not in mid),
+                    checkpoints=list(sorted(job.model_ids)),
+                )
+                model_store = get_ft_store()
+                model_store.put(
+                    request.serialize(cache_dataset=False),
+                    model_ref.serialize(),
+                )
+                await asyncio.to_thread(model_store.flush)
+                future.set_result(model_ref)
+            else:
+                future.set_exception(RuntimeError(f"Fine-tune job {job.id} failed"))
 
     async def _poll_status(self) -> None:
+        from urim.env import storage_subdir
+
         await self._ready.wait()
 
         while not self._stop_poller.is_set():
@@ -256,12 +275,10 @@ class FineTuneController:
             for request in stale:
                 self._futures.pop(request)
                 self._inflight.pop(request)
-                self._inflight_store.remove(
-                    request.serialize(self._datasets_cache_dir, cache_dataset=False)
-                )
+                self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
 
-                ds_path = self._datasets_cache_dir / f"{hash(request.train_ds)}.jsonl"
+                ds_path = storage_subdir("ft", "datasets") / f"{hash(request.train_ds)}.jsonl"
                 if ds_path.exists():
                     ds_path.unlink()
 

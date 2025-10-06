@@ -13,6 +13,7 @@ import pytest_asyncio
 from httpx import Request, Response
 
 from urim.dataset import Dataset
+from urim.env import set_storage_root, storage_subdir
 from urim.ft.controller import FineTuneController, FineTuneRequest
 from urim.ft.openai import OpenAIFineTuneJob
 from urim.ft.service import FineTuneJobStatus, FineTuneService
@@ -96,7 +97,17 @@ class StubFineTuneService(FineTuneService):
             for real_job in self.jobs:
                 if real_job.id == job:
                     real_job.status = FineTuneJobStatus.COMPLETED
+                    real_job.model_ids = [
+                        f"{real_job.id}-model",
+                        f"{real_job.id}-ckpt-step-100",
+                    ]
                     break
+
+
+@pytest.fixture(autouse=True)
+def configure_ft_storage(tmp_path: Path) -> None:
+    set_storage_root(tmp_path)
+    _ = storage_subdir("ft")
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -132,7 +143,10 @@ def make_request() -> FineTuneRequest:
     )
 
 
-async def test_basic_single_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_basic_single_job(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_service: dict[str, StubFineTuneService],
+) -> None:
     monkeypatch.setattr(
         "urim.env.collect_openai_keys",
         lambda: ["primary-key"],
@@ -142,21 +156,24 @@ async def test_basic_single_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         max_concurrent=1,
         poll_status_interval=0.1,
         retry_submission_interval=0.1,
-        cache_dir=tmp_path / "ft",
     )
     await controller.start()
 
     future = await controller.submit(make_request())
-    job = await asyncio.wait_for(future, timeout=1.5)
-    assert job.service_identifier == "primary-key"
-    assert job.status == FineTuneJobStatus.COMPLETED
-    assert job.id == "stub-job-0"
+    model_ref = await asyncio.wait_for(future, timeout=1.5)
+    assert model_ref.slug == "stub-job-0-model"
+
+    recorded_job = stub_service["primary-key"].jobs[0]
+    assert recorded_job.service_identifier == "primary-key"
+    assert recorded_job.status == FineTuneJobStatus.COMPLETED
+    assert recorded_job.id == "stub-job-0"
 
     await controller.stop()
 
 
 async def test_rotate_service_when_rate_limited(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    stub_service: dict[str, StubFineTuneService],
 ) -> None:
     monkeypatch.setattr(
         "urim.env.collect_openai_keys",
@@ -166,7 +183,6 @@ async def test_rotate_service_when_rate_limited(
     controller = FineTuneController(
         max_concurrent=3,
         poll_status_interval=0.1,
-        cache_dir=tmp_path / "ft",
     )
     await controller.start()
 
@@ -174,20 +190,21 @@ async def test_rotate_service_when_rate_limited(
     future2 = await controller.submit(make_request())
     future3 = await controller.submit(make_request())
 
-    job1 = await asyncio.wait_for(future1, timeout=1.5)
-    job2 = await asyncio.wait_for(future2, timeout=1.5)
-    job3 = await asyncio.wait_for(future3, timeout=1.5)
+    model1 = await asyncio.wait_for(future1, timeout=1.5)
+    model2 = await asyncio.wait_for(future2, timeout=1.5)
+    model3 = await asyncio.wait_for(future3, timeout=1.5)
 
-    assert job1.id == "stub-job-0"
-    assert job1.service_identifier == "primary-key"
-    assert job2.id == "stub-job-1"
-    assert job2.service_identifier == "primary-key"
-    assert job3.id == "stub-job-0"
-    assert job3.service_identifier == "secondary-key"
+    assert model1.slug == "stub-job-0-model"
+    assert model2.slug == "stub-job-1-model"
+    assert model3.slug == "stub-job-0-model"
+
+    assert stub_service["primary-key"].jobs[0].service_identifier == "primary-key"
+    assert stub_service["primary-key"].jobs[1].service_identifier == "primary-key"
+    assert stub_service["secondary-key"].jobs[0].service_identifier == "secondary-key"
 
 
 async def test_submit_job_no_capacity(
-    monkeypatch: pytest.MonkeyPatch, stub_service: dict[str, StubFineTuneService], tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, stub_service: dict[str, StubFineTuneService]
 ) -> None:
     monkeypatch.setattr(
         "urim.env.collect_openai_keys",
@@ -198,7 +215,6 @@ async def test_submit_job_no_capacity(
         max_concurrent=1,
         poll_status_interval=0.1,
         retry_submission_interval=0.1,
-        cache_dir=tmp_path / "ft",
     )
     await controller.start()
 
@@ -221,13 +237,13 @@ async def test_submit_job_no_capacity(
     assert stub_service["primary-key"].jobs[0].id == "stub-job-0"
     assert stub_service["primary-key"].jobs[1].id == "stub-job-1"
 
-    job1 = await asyncio.wait_for(future1, timeout=1.5)
-    job2 = await asyncio.wait_for(future2, timeout=1.5)
-    job3 = await asyncio.wait_for(future3, timeout=1.5)
+    model1 = await asyncio.wait_for(future1, timeout=1.5)
+    model2 = await asyncio.wait_for(future2, timeout=1.5)
+    model3 = await asyncio.wait_for(future3, timeout=1.5)
 
-    assert job1.id == "stub-job-0"
-    assert job2.id == "stub-job-1"
-    assert job3.id == "stub-job-2"
+    assert model1.slug == "stub-job-0-model"
+    assert model2.slug == "stub-job-1-model"
+    assert model3.slug == "stub-job-2-model"
 
     await controller.stop()
 
@@ -235,7 +251,6 @@ async def test_submit_job_no_capacity(
 async def test_restart_recovers_inflight_jobs(
     monkeypatch: pytest.MonkeyPatch,
     stub_service: dict[str, StubFineTuneService],
-    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
         "urim.env.collect_openai_keys",
@@ -248,7 +263,6 @@ async def test_restart_recovers_inflight_jobs(
         max_concurrent=2,
         poll_status_interval=0.05,
         retry_submission_interval=0.05,
-        cache_dir=tmp_path / "ft",
     )
     await controller.start()
 
@@ -287,24 +301,20 @@ async def test_restart_recovers_inflight_jobs(
     future2 = await controller.submit(request2)
     future3 = await controller.submit(request3)
 
-    job1 = await asyncio.wait_for(future1, timeout=1.5)
-    job2 = await asyncio.wait_for(future2, timeout=1.5)
-    job3 = await asyncio.wait_for(future3, timeout=1.5)
+    model1 = await asyncio.wait_for(future1, timeout=1.5)
+    model2 = await asyncio.wait_for(future2, timeout=1.5)
+    model3 = await asyncio.wait_for(future3, timeout=1.5)
 
-    assert job1.status == FineTuneJobStatus.COMPLETED
-    assert job1.id == "stub-job-0"
-    assert job1.service_identifier == "primary-key"
+    assert model1.slug == "stub-job-0-model"
+    assert model2.slug == "stub-job-1-model"
+    assert model3.slug == "stub-job-2-model"
 
-    assert job2.status == FineTuneJobStatus.COMPLETED
-    assert job2.id == "stub-job-1"
-    assert job2.service_identifier == "primary-key"
-
-    assert job3.status == FineTuneJobStatus.COMPLETED
-    assert job3.id == "stub-job-2"
-    assert job3.service_identifier == "primary-key"
+    assert service.jobs[0].status == FineTuneJobStatus.COMPLETED
+    assert service.jobs[1].status == FineTuneJobStatus.COMPLETED
+    assert service.jobs[2].status == FineTuneJobStatus.COMPLETED
 
     await controller.stop()
 
-    store: DiskStore[str, str] = DiskStore(tmp_path / "ft" / "inflight.jsonl")
+    store: DiskStore[str, str] = DiskStore(storage_subdir("ft") / "inflight.jsonl")
     assert store._page.empty
-    assert not (tmp_path / "ft" / "datasets" / f"{hash(request.train_ds)}.jsonl").exists()
+    assert not (storage_subdir("ft") / "datasets" / f"{hash(request.train_ds)}.jsonl").exists()

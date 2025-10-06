@@ -140,6 +140,9 @@ class Dataset:
         inplace: bool = False,
         **kwargs: Any,
     ) -> Dataset:
+        if frac is not None and frac > 1:
+            frac = frac / 100
+
         df = self._df.sample(n=n, frac=frac, **kwargs)
         return self._maybe_inplace(df, inplace=inplace)
 
