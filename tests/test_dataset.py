@@ -144,6 +144,31 @@ def test_concat_no_llm(dataset: Dataset) -> None:
     assert len(concat.df()) == 8
 
 
+def test_hash_normalizes_dataframe() -> None:
+    ds1 = Dataset(
+        pd.DataFrame(
+            {
+                "payload": [
+                    {"alpha": 1, "beta": [1, 2]},
+                    {"alpha": 2, "beta": [3, 4]},
+                ]
+            }
+        )
+    )
+    ds2 = Dataset(
+        pd.DataFrame(
+            {
+                "payload": [
+                    {"beta": [1, 2], "alpha": 1},
+                    {"beta": [3, 4], "alpha": 2},
+                ]
+            }
+        )
+    )
+
+    assert hash(ds1) == hash(ds2)
+
+
 @requires_llm
 async def test_generate(tmp_path: Path) -> None:
     ds = Dataset(dataset="tatsu-lab/alpaca", split="train")

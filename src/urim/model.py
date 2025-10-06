@@ -86,9 +86,6 @@ async def model(
     future = await controller.submit(request)
     model_ref = await future
 
-    ft_store.put(desc_key, model_ref.serialize())
-    await asyncio.to_thread(ft_store.flush)
-
     return model_ref
 
 

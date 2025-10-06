@@ -117,7 +117,6 @@ class OpenAIFineTuneService(FineTuneService):
             status=_STATUS_MAP.get(job.status, FineTuneJobStatus.PENDING),
             service_identifier=self.api_key,
             model_ids=list(model_ids),
-            raw=job,
         )
 
     async def _get_checkpoints(self, job_id: FineTuneJobId) -> list[str]:
