@@ -8,6 +8,7 @@ import pytest
 
 from urim.ai.client import ChatResult
 from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, NextToken, Rating
+from urim.env import set_storage_root
 
 DUMMY_FN = """\
 def fn(x: pd.Series):
@@ -15,24 +16,17 @@ def fn(x: pd.Series):
 """
 
 
+@pytest.fixture(autouse=True)
+def configure_question_storage(tmp_path: Path) -> None:
+    import urim.ai.question as qmod
+
+    set_storage_root(tmp_path)
+    qmod._caches.clear()
+
+
 @pytest.fixture()
 def completion(request: pytest.FixtureRequest) -> str:
     return getattr(request, "param", "answer-1")
-
-
-@pytest.fixture(autouse=True)
-def force_question_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    import urim.ai.question as qmod
-
-    qmod._caches.clear()
-
-    original_init = qmod.Question.__init__
-
-    def _init(self: Any, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
-        original_init(self, *args, **kwargs)
-        self.cache_dir = Path(tmp_path)
-
-    monkeypatch.setattr(qmod.Question, "__init__", _init, raising=True)
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +86,6 @@ async def test_extract_json(chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractJSON(prompt="Give me a dummy json")
     answer, extra = await q.resolve("test-model")
     assert answer == '{"foo": 1, "bar": "dummy"}'
-    # extra is always a dict; JSON extractor may or may not include parsed obj
     assert isinstance(extra, dict)
     assert chat_stub_calls["count"] == 1
 

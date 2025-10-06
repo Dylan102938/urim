@@ -79,16 +79,20 @@ async def extract_op_fn(
 
 
 class Dataset:
-    def __init__(self, dataset: pd.DataFrame | str, **kwargs: Any):
+    def __init__(self, dataset: pd.DataFrame | str | Path, **kwargs: Any):
         import pandas as pd
         from datasets import load_dataset
 
         self._df: pd.DataFrame
-        if isinstance(dataset, str):
-            if Path(dataset).exists():
-                self._df = pd.read_json(dataset, orient="records", lines=True, **kwargs)
-            else:
+        if isinstance(dataset, str | Path):
+            path = Path(dataset)
+            if path.exists():
+                self._df = pd.read_json(path, orient="records", lines=True, **kwargs)
+            elif isinstance(dataset, str):
                 self._df = load_dataset(dataset, **kwargs).to_pandas()
+            else:
+                msg = f"Dataset path {path} does not exist"
+                raise FileNotFoundError(msg)
         else:
             self._df = dataset
 

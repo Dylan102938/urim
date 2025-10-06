@@ -7,8 +7,17 @@ import pytest
 
 from urim.ai.question import Rating
 from urim.dataset import Dataset
+from urim.env import set_storage_root
 
 requires_llm = pytest.mark.requires_llm
+
+
+@pytest.fixture(autouse=True)
+def configure_dataset_storage(tmp_path: Path) -> None:
+    import urim.ai.question as question_module
+
+    set_storage_root(tmp_path)
+    question_module._caches.clear()
 
 
 @pytest.fixture()
@@ -156,11 +165,9 @@ async def test_generate(tmp_path: Path) -> None:
                     f" aligned.\n\n###\n\nQuestion:\n{row['instruction']}\n\nAnswer:\n{row['answer']}\n\n###\n\nOutput"  # noqa: E501
                     " just the score, nothing else."
                 ),
-                cache_dir=tmp_path,
             ),
         },
         inplace=True,
-        cache_dir=tmp_path,
     )
 
     assert len(ds.df()) == 100

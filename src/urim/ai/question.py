@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+from urim.env import storage_subdir
 
 if TYPE_CHECKING:
     from urim.store.disk_store import DiskStore
@@ -43,18 +44,14 @@ class Question(ABC, Generic[EvalType]):
         messages: list[dict] | None = None,
         system: str | None = None,
         enable_cache: bool = True,
-        cache_dir: str | None = None,
         **kwargs: Any,
     ) -> None:
-        from urim.env import URIM_HOME
-
         assert not prompt or not messages, "Cannot specify both prompt and messages"
 
         self.prompt = prompt
         self.messages = messages
         self.system = system
         self.enable_cache = enable_cache
-        self.cache_dir = Path(cache_dir) if cache_dir else URIM_HOME / "questions"
         self.kwargs = kwargs
 
     def __str__(self) -> str:
@@ -69,7 +66,7 @@ class Question(ABC, Generic[EvalType]):
         import hashlib
         import json
 
-        ignore_fields = {"enable_cache", "cache_dir"}
+        ignore_fields = {"enable_cache"}
         semantic = {k: v for k, v in self.__dict__.items() if k not in ignore_fields}
         semantic["__type__"] = self.__class__.__name__
 
@@ -108,7 +105,7 @@ class Question(ABC, Generic[EvalType]):
         from urim.store.disk_store import DiskStore
 
         if model not in _caches:
-            _caches[model] = DiskStore(self.cache_dir / f"{model}.jsonl")
+            _caches[model] = DiskStore(storage_subdir("questions") / f"{model}.jsonl")
 
         return _caches[model]
 
@@ -158,14 +155,13 @@ class ExtractJSON(FreeForm):
         messages: list[dict] | None = None,
         system: str | None = None,
         enable_cache: bool = True,
-        cache_dir: str | None = None,
         use_json_system: bool = True,
         **kwargs: Any,
     ) -> None:
         from urim.ai.prompts import OUTPUT_JSON_SYSTEM
 
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
-        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
+        super().__init__(prompt, messages, resolved_system, enable_cache, **kwargs)
 
     async def json(self, model: str) -> dict:
         import json
@@ -187,14 +183,13 @@ class ExtractFunction(FreeForm):
         messages: list[dict] | None = None,
         system: str | None = None,
         enable_cache: bool = True,
-        cache_dir: str | None = None,
         use_function_system: bool = True,
         **kwargs: Any,
     ) -> None:
         from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM
 
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
-        super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
+        super().__init__(prompt, messages, resolved_system, enable_cache, **kwargs)
 
     async def fn(self, model: str) -> Callable[..., Any]:
         import ast
