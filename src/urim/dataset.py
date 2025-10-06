@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, Sequence
+from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+import pandas as pd
+
 if TYPE_CHECKING:
-    import pandas as pd
 
     from urim.ai.question import Question
 
@@ -99,12 +102,11 @@ class Dataset:
         self._init_dataset_kwargs = kwargs
 
     def __hash__(self) -> int:
-        import numpy as np
         from blake3 import blake3
         from pandas.util import hash_pandas_object
 
         hasher = blake3()
-        df = self._df.reindex(sorted(self._df.columns), axis=1)
+        df = _normalize_dataframe(self._df)
 
         for key, mul in [
             ("0123456789ABCDEF", 0x9E3779B97F4A7C15),
@@ -475,3 +477,108 @@ class Dataset:
         await Question.flush_cache(model)
 
         return judge_results
+
+
+def _normalize_cell(value: Any) -> Hashable | None:
+    import datetime as dt
+    import math
+
+    if isinstance(value, np.generic):
+        value = value.item()
+
+    if value is None:
+        return None
+
+    if value is pd.NA:
+        return None
+
+    if isinstance(value, np.bool_ | bool):
+        return bool(value)
+
+    if isinstance(value, np.integer | int) and not isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, Real) and not isinstance(value, bool):
+        float_value = float(value)
+        if math.isnan(float_value):
+            return None
+        return float_value
+
+    if isinstance(value, str | bytes):
+        return value
+
+    if isinstance(value, dt.datetime | dt.date | dt.time):
+        return value.isoformat()
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    if isinstance(value, pd.Timedelta):
+        return value.isoformat()
+
+    if isinstance(value, np.datetime64 | dt.datetime):
+        return pd.Timestamp(value).isoformat()
+
+    if isinstance(value, np.timedelta64 | dt.timedelta):
+        return pd.Timedelta(value).isoformat()
+
+    if isinstance(value, pd.Series):
+        return (
+            "series",
+            tuple(_normalize_cell(v) for v in value.tolist()),
+        )
+
+    if isinstance(value, pd.DataFrame):
+        normalized_df = _normalize_dataframe(value)
+        return (
+            "dataframe",
+            tuple(tuple(row) for row in normalized_df.to_numpy().tolist()),
+        )
+
+    if isinstance(value, np.ndarray):
+        return (
+            "ndarray",
+            tuple(_normalize_cell(v) for v in value.tolist()),
+        )
+
+    if isinstance(value, Mapping):
+        items = tuple(
+            (str(k), _normalize_cell(v))
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return ("map", items)
+
+    if isinstance(value, set | frozenset):
+        normalized_members = [_normalize_cell(v) for v in value]
+        sorted_members = tuple(sorted(normalized_members, key=lambda elem: repr(elem)))
+        return ("set", sorted_members)
+
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return ("seq", tuple(_normalize_cell(v) for v in value))
+
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:  # pragma: no cover - fallback to repr
+            pass
+
+    if hasattr(value, "__dict__"):
+        attrs = tuple(
+            (str(k), _normalize_cell(v))
+            for k, v in sorted(vars(value).items(), key=lambda item: str(item[0]))
+        )
+        return ("object", attrs)
+
+    return repr(value)
+
+
+def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    normalized_cols = sorted(df.columns, key=lambda col: str(col))
+    normalized_df = df.reindex(columns=normalized_cols)
+    return normalized_df.map(_normalize_cell)
