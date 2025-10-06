@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import threading
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM, OUTPUT_JSON_SYSTEM
-from urim.env import URIM_HOME
-from urim.store.disk_store import DiskStore
+if TYPE_CHECKING:
+    from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
 QuestionResult = tuple[EvalType, dict[str, Any]]
 
-_make_cache_lock = threading.Lock()
 _caches: dict[str, DiskStore] = {}
 
 
@@ -48,13 +46,15 @@ class Question(ABC, Generic[EvalType]):
         cache_dir: str | None = None,
         **kwargs: Any,
     ) -> None:
+        from urim.env import URIM_HOME
+
         assert not prompt or not messages, "Cannot specify both prompt and messages"
 
         self.prompt = prompt
         self.messages = messages
         self.system = system
         self.enable_cache = enable_cache
-        self.cache_dir = str(Path(cache_dir) if cache_dir else URIM_HOME / "questions")
+        self.cache_dir = Path(cache_dir) if cache_dir else URIM_HOME / "questions"
         self.kwargs = kwargs
 
     def __str__(self) -> str:
@@ -78,61 +78,65 @@ class Question(ABC, Generic[EvalType]):
 
         return hashlib.sha256(json_str.encode()).hexdigest()
 
-    def resolve(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
+    async def resolve(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
         """Resolves the question with a response from the specified model.
 
         Cache is automatically flushed when the question is resolved. If you don't want this to
-        happen, set `flush_cache` to `False` and manually flush the cache to persist the result.
+        happen, set `flush_cache` to `False` and manually flush with `Question.flush_cache(model)`
+        to persist the result.
         """
 
         result: QuestionResult[EvalType] | None = None
+        cache: DiskStore | None = None
         if self.enable_cache:
             cache = self.get_model_cache(model)
             result = cache.get(self.hash())
 
         if result is None:
-            result = self.fetch(model)
-            if self.enable_cache:
+            result = await self.fetch(model)
+            if self.enable_cache and cache is not None:
                 cache.put(self.hash(), result)
                 if flush_cache:
-                    cache.flush()
+                    await asyncio.to_thread(cache.flush)
 
         return result
 
-    def get_model_cache(self, model: str) -> DiskStore:
-        with _make_cache_lock:
-            if model not in _caches:
-                _caches[model] = DiskStore(Path(self.cache_dir) / f"{model}.jsonl")
+    def resolve_sync(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
+        return asyncio.run(self.resolve(model, flush_cache=flush_cache))
 
-            return _caches[model]
+    def get_model_cache(self, model: str) -> DiskStore:
+        from urim.store.disk_store import DiskStore
+
+        if model not in _caches:
+            _caches[model] = DiskStore(self.cache_dir / f"{model}.jsonl")
+
+        return _caches[model]
 
     def remove_from_cache(self, model: str) -> None:
-        with _make_cache_lock:
-            if model in _caches:
-                return
+        if model not in _caches:
+            return
 
-            _caches[model].remove(self.hash())
+        _caches[model].remove(self.hash())
 
     @classmethod
-    def flush_cache(cls, model: str) -> None:
-        with _make_cache_lock:
-            if model not in _caches:
-                return
+    async def flush_cache(cls, model: str) -> None:
+        if model not in _caches:
+            return
 
-            _caches[model].flush()
+        await asyncio.to_thread(_caches[model].flush)
 
     @abstractmethod
-    def fetch(self, model: str) -> QuestionResult[EvalType]:
+    async def fetch(self, model: str) -> QuestionResult[EvalType]:
         """Ignores cache and always fetches a fresh response from LLM"""
         ...
 
 
 class FreeForm(Question[str]):
-    def fetch(self, model: str) -> QuestionResult[str]:
+    async def fetch(self, model: str) -> QuestionResult[str]:
         from urim.ai.client import LLM
 
         messages = self.resolve_to_messages()
-        completion = LLM().chat_completion(model, messages=messages, **self.kwargs)
+        completion = await LLM().chat_completion(model, messages=messages, **self.kwargs)
         return (completion.content or "", {})
 
     def resolve_to_messages(self) -> list[dict]:
@@ -158,17 +162,22 @@ class ExtractJSON(FreeForm):
         use_json_system: bool = True,
         **kwargs: Any,
     ) -> None:
+        from urim.ai.prompts import OUTPUT_JSON_SYSTEM
+
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
-    def json(self, model: str) -> dict:
+    async def json(self, model: str) -> dict:
         import json
 
-        result, _ = self.resolve(model)
+        result, _ = await self.resolve(model)
         if result.startswith("```json") and result.endswith("```"):
             result = result[len("```json") : -len("```")]
 
         return json.loads(result)
+
+    def json_sync(self, model: str) -> dict:
+        return asyncio.run(self.json(model))
 
 
 class ExtractFunction(FreeForm):
@@ -182,14 +191,16 @@ class ExtractFunction(FreeForm):
         use_function_system: bool = True,
         **kwargs: Any,
     ) -> None:
+        from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM
+
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
         super().__init__(prompt, messages, resolved_system, enable_cache, cache_dir, **kwargs)
 
-    def fn(self, model: str) -> Callable[..., Any]:
+    async def fn(self, model: str) -> Callable[..., Any]:
         import ast
         import inspect
 
-        result, _ = super().resolve(model)
+        result, _ = await super().resolve(model)
         if result.startswith("```python") and result.endswith("```"):
             result = result[len("```python") : -len("```")]
 
@@ -210,6 +221,9 @@ class ExtractFunction(FreeForm):
 
         return fn_obj
 
+    def fn_sync(self, model: str) -> Callable[..., Any]:
+        return asyncio.run(self.fn(model))
+
 
 class Rating(Question[float]):
     def __init__(
@@ -226,10 +240,10 @@ class Rating(Question[float]):
         self.max_rating = max_rating
         self.refusal_threshold = refusal_threshold
 
-    def fetch(self, model: str) -> QuestionResult[float]:
+    async def fetch(self, model: str) -> QuestionResult[float]:
         from urim.ai.client import LLM
 
-        completion = LLM().chat_completion(
+        completion = await LLM().chat_completion(
             model,
             messages=self.messages,
             prompt=self.prompt,
@@ -281,10 +295,10 @@ class NextToken(Question):
     ) -> None:
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
 
-    def fetch(self, model: str) -> QuestionResult[str]:
+    async def fetch(self, model: str) -> QuestionResult[str]:
         from urim.ai.client import LLM
 
-        completion = LLM().chat_completion(
+        completion = await LLM().chat_completion(
             model,
             messages=self.messages,
             prompt=self.prompt,
@@ -295,4 +309,4 @@ class NextToken(Question):
             convert_to_probs=True,
         )
 
-        return completion.content or "", {"raw": completion.top_tokens}
+        return completion.content or "", {"probs": completion.top_tokens or {}}

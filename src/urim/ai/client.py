@@ -8,6 +8,7 @@ from typing import Any
 import backoff
 import openai
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
@@ -34,7 +35,7 @@ class LLM:
         self.api_key = api_key
         self.timeout = timeout
 
-    def chat_completion(
+    async def chat_completion(
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
@@ -46,14 +47,14 @@ class LLM:
             raise ValueError("Either messages or prompt must be provided")
 
         final_messages = messages if messages is not None else _prompt_to_messages(prompt or "")
-        return self._request(
+        return await self._request(
             model=model,
             messages=final_messages,
             convert_to_probs=convert_to_probs,
             **kwargs,
         )
 
-    def _build_client(self, model: str) -> openai.Client:
+    async def _build_client(self, model: str) -> AsyncOpenAI:
         openai_keys = _collect_openai_keys(explicit_key=self.api_key)
         openrouter_keys = [self.api_key or OPENROUTER_API_KEY]
         custom_keys = [self.api_key] if self.api_key else []
@@ -81,13 +82,13 @@ class LLM:
         )
 
         for key, base_url in openai_setup + openrouter_setup + custom_setup:
-            client = openai.OpenAI(
+            client = AsyncOpenAI(
                 api_key=key,
                 base_url=base_url,
                 timeout=self.timeout,
             )
 
-            is_client_valid = _test_client(client, model)
+            is_client_valid = await _test_client(client, model)
             if not is_client_valid:
                 continue
 
@@ -95,7 +96,7 @@ class LLM:
 
         raise RuntimeError("No valid client found")
 
-    def _request(
+    async def _request(
         self,
         *,
         model: str,
@@ -103,8 +104,8 @@ class LLM:
         convert_to_probs: bool = True,
         **kwargs: Any,
     ) -> ChatResult:
-        client = self._build_client(model)
-        resp = openai_chat_completion(
+        client = await self._build_client(model)
+        resp = await openai_chat_completion(
             client,
             model=model,
             messages=messages,
@@ -145,11 +146,11 @@ def _on_backoff(details: Any) -> None:
     factor=1.5,
     on_backoff=_on_backoff,
 )
-def openai_chat_completion(client: openai.Client, *args: Any, **kwargs: Any) -> ChatCompletion:
-    return client.chat.completions.create(*args, **kwargs)
+async def openai_chat_completion(client: AsyncOpenAI, *args: Any, **kwargs: Any) -> ChatCompletion:
+    return await client.chat.completions.create(*args, **kwargs)
 
 
-def _test_client(client: openai.Client, model: str) -> bool:
+async def _test_client(client: AsyncOpenAI, model: str) -> bool:
     try:
         kwargs = {
             "model": model,
@@ -159,7 +160,7 @@ def _test_client(client: openai.Client, model: str) -> bool:
         if not model.startswith("o") and not model.startswith("gpt-5"):
             kwargs["max_tokens"] = 1
 
-        openai_chat_completion(client, **kwargs)
+        await openai_chat_completion(client, **kwargs)
         return True
     except (
         openai.NotFoundError,

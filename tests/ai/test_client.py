@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from urim.ai.client import LLM, _collect_openai_keys
+from urim.ai.client import LLM
+from urim.env import collect_openai_keys
 
 requires_llm = pytest.mark.requires_llm
 
@@ -17,20 +18,21 @@ def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("OPENAI_API_KEY_1", "C")
     monkeypatch.setenv("OPENAI_API_KEY_2", "A")
 
-    keys = _collect_openai_keys()
+    keys = collect_openai_keys()
     assert keys == ["A", "B", "C"]
 
 
 @requires_llm
-def test_client_calls_openai() -> None:
+@pytest.mark.asyncio
+async def test_client_calls_openai() -> None:
     client = LLM()
-    keys = _collect_openai_keys()
+    keys = collect_openai_keys()
 
     if len(keys) == 0:
         pytest.skip("No OpenAI keys found")
 
     client = LLM()
-    result = client.chat_completion(
+    result = await client.chat_completion(
         model="gpt-4.1-nano",
         prompt="Hi there",
         max_tokens=1,
