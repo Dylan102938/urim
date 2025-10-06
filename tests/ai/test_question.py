@@ -59,7 +59,6 @@ def chat_stub_calls(monkeypatch: pytest.MonkeyPatch, completion: str) -> dict[st
     return call_counts
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("use_cache", [True, False])
 @pytest.mark.parametrize("completion", ["answer-1"])
 async def test_freeform(use_cache: bool, chat_stub_calls: dict[str, Any]) -> None:
@@ -88,7 +87,6 @@ async def test_freeform(use_cache: bool, chat_stub_calls: dict[str, Any]) -> Non
     assert chat_stub_calls["count"] == 1 + int(not use_cache)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("completion", ['{"foo": 1, "bar": "dummy"}'], indirect=True)
 async def test_extract_json(chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractJSON(prompt="Give me a dummy json")
@@ -108,7 +106,6 @@ async def test_extract_json(chat_stub_calls: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize("completion", [DUMMY_FN], indirect=True)
-@pytest.mark.asyncio
 async def test_extract_function(chat_stub_calls: dict[str, Any]) -> None:
     q = ExtractFunction(prompt="Write a function")
     code, extra = await q.resolve("test-model")
@@ -126,7 +123,6 @@ async def test_extract_function(chat_stub_calls: dict[str, Any]) -> None:
     assert chat_stub_calls["count"] == 1
 
 
-@pytest.mark.asyncio
 async def test_rating(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _chat_stub_completion(_: Any, _model: str, **_kwargs: Any) -> ChatResult:
         return ChatResult(
@@ -143,7 +139,6 @@ async def test_rating(monkeypatch: pytest.MonkeyPatch) -> None:
     assert extra == {"raw": {"1": 0.6, "2": 0.3, "3": 0.1}}
 
 
-@pytest.mark.asyncio
 async def test_next_token(chat_stub_calls: dict[str, Any]) -> None:
     q = NextToken(prompt="Predict next token")
     answer, extra = await q.resolve("test-model")

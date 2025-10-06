@@ -23,7 +23,6 @@ def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -
 
 
 @requires_llm
-@pytest.mark.asyncio
 async def test_client_calls_openai() -> None:
     client = LLM()
     keys = collect_openai_keys()
