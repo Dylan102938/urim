@@ -1,19 +1,24 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Hashable
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     pass
 
 
-class Store(ABC):
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
+
+
+class Store(Generic[K, V], ABC):
     @abstractmethod
     def full(self) -> bool: ...
 
     @abstractmethod
-    def get(self, key: str) -> Any | None: ...
+    def get(self, key: K) -> V | None: ...
 
     @abstractmethod
-    def put(self, key: str, value: Any) -> None: ...
+    def put(self, key: K, value: V) -> None: ...
 
     @abstractmethod
-    def remove(self, key: str) -> None: ...
+    def remove(self, key: K) -> None: ...

@@ -1,11 +1,15 @@
 import threading
+from collections.abc import Hashable
 from pathlib import Path
-from typing import Any
+from typing import Generic, TypeVar
 
 from urim.store.base import Store
 
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
 
-class DiskStore(Store):
+
+class DiskStore(Generic[K, V], Store[K, V]):
     """Maintains a disk-backed jsonl page of key-value pairs.
 
     Caches up to `page_size` records on the page, and evicts the oldest records if the page is full.
@@ -40,16 +44,15 @@ class DiskStore(Store):
             self._page = pd.DataFrame(columns=["key", "value"]).set_index("key")
 
         self._lock = threading.RLock()
-        self._flush_lock = threading.Lock()
 
     def full(self) -> bool:
         return len(self._page) >= self.page_size
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: K) -> V | None:
         with self._lock:
             return self._page["value"].get(key)
 
-    def put(self, key: str, value: Any) -> None:
+    def put(self, key: K, value: V) -> None:
         with self._lock:
             self._page.drop(index=key, errors="ignore", inplace=True)
             self._page.loc[key, "value"] = value
@@ -64,12 +67,12 @@ class DiskStore(Store):
             to_drop = self._page.iloc[:overflow].index
             self._page.drop(index=to_drop, inplace=True)
 
-    def remove(self, key: str) -> None:
+    def remove(self, key: K) -> None:
         with self._lock:
             self._page.drop(index=key, errors="ignore", inplace=True)
 
     def flush(self) -> None:
-        with self._flush_lock:
+        with self._lock:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot = self._page.copy().reset_index(names="key")
             snapshot.to_json(self.store_path, orient="records", lines=True)
