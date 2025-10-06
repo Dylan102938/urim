@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 import backoff
 import openai
-from dotenv import load_dotenv
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
@@ -14,10 +13,8 @@ from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-load_dotenv()
 
-
-@dataclass
+@dataclass(frozen=True)
 class ChatResult:
     content: str | None
     raw: dict[str, Any]
