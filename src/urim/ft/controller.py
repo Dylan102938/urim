@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Hashable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Literal
+
+from typing_extensions import Self
 
 from urim.ft.openai import OpenAIFineTuneJob, OpenAIFineTuneService
 
