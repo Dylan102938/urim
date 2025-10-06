@@ -248,7 +248,7 @@ class Dataset:
 
     async def apply(
         self,
-        fn: Callable[[pd.Series], bool] | None = None,
+        fn: Callable[[pd.Series], Any] | None = None,
         column: str | None = None,
         hint: str | None = None,
         model: str = PRESET_BALANCED,
