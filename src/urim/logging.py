@@ -21,6 +21,8 @@ class _ColorFormatter(logging.Formatter):
         logging.CRITICAL: "\033[35m",  # magenta
     }
     _RESET = "\033[0m"
+    _BOLD = "\033[1m"
+    _BOLD_OFF = "\033[22m"
 
     def __init__(self, *, use_color: bool) -> None:
         super().__init__(
@@ -30,13 +32,29 @@ class _ColorFormatter(logging.Formatter):
         self._use_color = use_color
 
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
-        message = super().format(record)
+        formatted = super().format(record)
         if not self._use_color:
-            return message
+            return formatted
+
         color = self._COLORS.get(record.levelno)
         if not color:
-            return message
-        return f"{color}{message}{self._RESET}"
+            return formatted
+
+        plain_message = record.getMessage()
+        if plain_message:
+            parts = formatted.rsplit(plain_message, 1)
+            if len(parts) == 2:
+                prefix, suffix = parts
+            else:
+                return formatted
+        else:
+            prefix, suffix = formatted, ""
+
+        bold_level = f"{self._BOLD}{record.levelname}{self._BOLD_OFF}"
+        styled_prefix = prefix.replace(record.levelname, bold_level, 1)
+        colored_prefix = f"{color}{styled_prefix}{self._RESET}"
+
+        return f"{colored_prefix}{plain_message}{suffix}"
 
 
 def _normalize_level(level: int | str) -> int:
