@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-
     from urim.ai.question import Question
 
 QuestionFactory = Callable[["pd.Series"], "Question"] | str

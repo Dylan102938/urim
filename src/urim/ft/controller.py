@@ -322,7 +322,7 @@ class FineTuneController:
 
         return job
 
-    async def _poll_request(self, request: FineTuneRequest) -> None:
+    async def _poll_request(self, request: FineTuneRequest) -> ModelRef | None:
         from urim.ft.service import FineTuneJobStatus
         from urim.model import ModelRef, get_ft_store
 
@@ -349,29 +349,34 @@ class FineTuneController:
         if job.status in (FineTuneJobStatus.COMPLETED, FineTuneJobStatus.FAILED):
             future = self._futures.get(request)
             if future is None or future.done():
-                return
+                return None
 
             if job.status == FineTuneJobStatus.COMPLETED:
                 model_ref = ModelRef(
                     slug=next(mid for mid in job.model_ids if "ckpt-step-" not in mid),
                     checkpoints=list(sorted(job.model_ids)),
                 )
+
                 model_store = get_ft_store()
                 model_store.put(
                     request.serialize(cache_dataset=False),
                     model_ref.serialize(),
                 )
                 await asyncio.to_thread(model_store.flush)
+
                 logger.info(
                     "Fine-tune job %s completed for request %s. Model slug=%s.",
                     job.id,
                     request,
                     model_ref.slug,
                 )
-                future.set_result(model_ref)
+
+                return model_ref
             else:
                 logger.error("Fine-tune job %s failed for request %s.", job.id, request)
-                future.set_exception(RuntimeError(f"Fine-tune job {job.id} failed"))
+                raise RuntimeError(f"Fine-tune job {job.id} failed")
+
+        return None
 
     async def _poll_status(self) -> None:
         from urim.env import storage_subdir
@@ -380,24 +385,25 @@ class FineTuneController:
 
         while not self._stop_poller.is_set():
             logger.debug("Polling status for %d inflight request(s).", len(self._inflight))
-            await asyncio.gather(
-                *(self._poll_request(request) for request in self._inflight.keys()),
+            inflight = list(self._inflight.keys())
+            refs_or_errors = await asyncio.gather(
+                *(self._poll_request(request) for request in inflight),
                 return_exceptions=True,
             )
 
             ### Cleanup stale futures ###
 
-            stale = [request for request, fut in self._futures.items() if fut.done()]
-            for request in stale:
-                self._futures.pop(request)
-                self._inflight.pop(request)
+            stale = [
+                request
+                for request, model_ref in zip(inflight, refs_or_errors, strict=False)
+                if model_ref is not None
+            ]
+            for request, model_ref in zip(inflight, refs_or_errors, strict=False):
+                if model_ref is None:
+                    continue
+
                 self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
-                logger.debug(
-                    "Cleaned up completed request %s and removed it from persistence.",
-                    request,
-                )
-
                 dataset_hash = hash(request.train_ds)
                 ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
                 if ds_path.exists():
@@ -420,6 +426,18 @@ class FineTuneController:
                             request,
                             ds_path,
                         )
+
+                logger.debug(
+                    "Cleaned up completed request %s and removed it from persistence.",
+                    request,
+                )
+
+                self._inflight.pop(request)
+                future = self._futures.pop(request)
+                if isinstance(model_ref, BaseException):
+                    future.set_exception(model_ref)
+                else:
+                    future.set_result(model_ref)
 
             if not self._stop_poller.is_set():
                 logger.debug("Sleeping %.2fs before next status poll.", self.poll_status_interval)

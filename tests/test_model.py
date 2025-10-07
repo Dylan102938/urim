@@ -9,7 +9,7 @@ import pytest
 from urim.dataset import Dataset
 from urim.env import set_storage_root, storage_file
 from urim.ft.controller import FineTuneRequest
-from urim.model import ModelRef, model
+from urim.model import ModelRef, get_ft_store, model
 from urim.store.disk_store import DiskStore
 
 
@@ -71,14 +71,20 @@ async def test_model_submits_finetune(monkeypatch: pytest.MonkeyPatch) -> None:
             self.requests.append(request)
             loop = asyncio.get_running_loop()
             fut = loop.create_future()
-            fut.set_result(
-                ModelRef(
-                    slug="ft-alias",
-                    checkpoints=[
-                        "ft-alias-ckpt",
-                    ],
-                )
+            model_ref = ModelRef(
+                slug="ft-alias",
+                checkpoints=[
+                    "ft-alias-ckpt",
+                ],
             )
+            fut.set_result(model_ref)
+
+            model_store = get_ft_store()
+            model_store.put(
+                request.serialize(cache_dataset=False),
+                model_ref.serialize(),
+            )
+            await asyncio.to_thread(model_store.flush)
 
             return fut
 
