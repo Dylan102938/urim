@@ -11,6 +11,7 @@ from urim.ft.service import (
     FineTuneJobStatus,
     FineTuneService,
 )
+from urim.logging import get_logger
 
 if TYPE_CHECKING:
     from openai.types.fine_tuning import FineTuningJob
@@ -25,6 +26,8 @@ _STATUS_MAP: dict[str, FineTuneJobStatus] = {
     "failed": FineTuneJobStatus.FAILED,
     "cancelled": FineTuneJobStatus.FAILED,
 }
+
+logger = get_logger("ft.openai")
 
 
 @dataclass
@@ -46,6 +49,10 @@ class OpenAIFineTuneService(FineTuneService):
 
         self._client = AsyncOpenAI(api_key=service_key)
         self.api_key = service_key
+        logger.debug(
+            "Initialized OpenAIFineTuneService with API key ending %s.",
+            service_key[-4:] if len(service_key) >= 4 else "***",
+        )
 
     async def create_job(
         self,
@@ -57,6 +64,13 @@ class OpenAIFineTuneService(FineTuneService):
         n_epochs: int = 1,
         **kwargs: Any,
     ) -> OpenAIFineTuneJob:
+        logger.debug(
+            "Creating fine-tune job for model=%s with lr=%s, batch_size=%s, epochs=%s.",
+            model,
+            learning_rate,
+            batch_size,
+            n_epochs,
+        )
         training_file_id = await self._upload_training_file(train_ds)
         job = await self._client.fine_tuning.jobs.create(
             model=model,
@@ -68,14 +82,21 @@ class OpenAIFineTuneService(FineTuneService):
             },
             **kwargs,
         )
+        logger.debug(
+            "OpenAI accepted fine-tune job request for model=%s; job id=%s.",
+            model,
+            job.id,
+        )
         return await self._convert_job(job)
 
     async def get_job(self, job_id: FineTuneJobId) -> OpenAIFineTuneJob:
         job = await self._client.fine_tuning.jobs.retrieve(job_id)
+        logger.debug("Fetched fine-tune job %s from OpenAI.", job_id)
         return await self._convert_job(job)
 
     async def delete_job(self, job_id: FineTuneJobId) -> OpenAIFineTuneJob:
         job = await self._client.fine_tuning.jobs.cancel(job_id)
+        logger.info("Requested cancellation for fine-tune job %s.", job_id)
         return await self._convert_job(job)
 
     async def list_jobs(self) -> list[OpenAIFineTuneJob]:
@@ -87,13 +108,17 @@ class OpenAIFineTuneService(FineTuneService):
             return_exceptions=True,
         )
 
-        return [job for job in converted if not isinstance(job, BaseException)]
+        result = [job for job in converted if not isinstance(job, BaseException)]
+        logger.debug("Retrieved %d fine-tune job(s) from OpenAI.", len(result))
+        return result
 
     async def _upload_training_file(self, dataset: Dataset) -> str:
         import io
 
         buffer = io.BytesIO()
-        dataset.df().to_json(buffer)
+        df = dataset.df()
+        logger.debug("Uploading training dataset with %d row(s) for fine-tuning.", len(df))
+        df.to_json(buffer)
         buffer.seek(0)
 
         upload = await self._client.files.create(
@@ -101,6 +126,7 @@ class OpenAIFineTuneService(FineTuneService):
             purpose="fine-tune",
         )
 
+        logger.debug("Uploaded training file to OpenAI; file id=%s.", upload.id)
         return upload.id
 
     async def _convert_job(self, job: FineTuningJob) -> OpenAIFineTuneJob:
@@ -109,6 +135,13 @@ class OpenAIFineTuneService(FineTuneService):
             checkpoints = await self._get_checkpoints(job.id)
             model_ids.update(checkpoints)
             model_ids.add(job.fine_tuned_model)
+
+        logger.debug(
+            "Converted OpenAI job %s with status=%s and %d model id(s).",
+            job.id,
+            job.status,
+            len(model_ids),
+        )
 
         return OpenAIFineTuneJob(
             id=job.id,
@@ -128,4 +161,9 @@ class OpenAIFineTuneService(FineTuneService):
         async for checkpoint in checkpoints:
             models.append(checkpoint.fine_tuned_model_checkpoint)
 
+        logger.debug(
+            "Discovered %d checkpoint model(s) for fine-tune job %s.",
+            len(models),
+            job_id,
+        )
         return models

@@ -9,9 +9,12 @@ import openai
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+from urim.logging import get_logger
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+logger = get_logger("ai.client")
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,11 @@ class LLM:
             raise ValueError("Either messages or prompt must be provided")
 
         final_messages = messages if messages is not None else _prompt_to_messages(prompt or "")
+        logger.debug(
+            "LLM.chat_completion request: model=%s, messages=%s",
+            model,
+            final_messages,
+        )
         return await self._request(
             model=model,
             messages=final_messages,
@@ -90,12 +98,29 @@ class LLM:
                 timeout=self.timeout,
             )
 
+            logger.debug(
+                "Testing LLM client for model=%s using base_url=%s key_suffix=%s.",
+                model,
+                base_url or "openai",
+                key[-4:] if key else "None",
+            )
             is_client_valid = await _test_client(client, model)
             if not is_client_valid:
+                logger.debug(
+                    "Skipping client for model=%s using base_url=%s; validation failed.",
+                    model,
+                    base_url or "openai",
+                )
                 continue
 
+            logger.debug(
+                "Selected client for model=%s using base_url=%s.",
+                model,
+                base_url or "openai",
+            )
             return client
 
+        logger.error("No valid client configuration found for model=%s.", model)
         raise RuntimeError("No valid client found")
 
     async def _request(
@@ -107,11 +132,22 @@ class LLM:
         **kwargs: Any,
     ) -> ChatResult:
         client = await self._build_client(model)
+        logger.debug(
+            "Dispatching chat completion to provider: model=%s, messages=%s, extra_args=%s",
+            model,
+            messages,
+            kwargs,
+        )
         resp = await openai_chat_completion(
             client,
             model=model,
             messages=messages,
             **kwargs,
+        )
+        logger.debug(
+            "Received chat completion response for model=%s: message=%s",
+            model,
+            resp.choices[0].message.content if resp.choices else None,
         )
 
         logprobs_dict: dict[str, float] | None = None
@@ -133,7 +169,12 @@ class LLM:
 def _on_backoff(details: Any) -> None:
     exception_details = details["exception"]
     if not str(exception_details).startswith("Connection error."):
-        print(exception_details)
+        logger.warning(
+            "LLM backoff triggered by exception: %s (tries=%s, next_wait=%s).",
+            exception_details,
+            details.get("tries"),
+            details.get("wait"),
+        )
 
 
 @backoff.on_exception(

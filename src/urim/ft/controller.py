@@ -8,12 +8,16 @@ from typing import TYPE_CHECKING, Literal
 from typing_extensions import Self
 
 from urim.ft.openai import OpenAIFineTuneJob, OpenAIFineTuneService
+from urim.logging import get_logger
 
 if TYPE_CHECKING:
     from urim.dataset import Dataset
     from urim.model import ModelRef
 
 RequestQueue = asyncio.PriorityQueue[tuple[float, int, "FineTuneRequest" | Literal["terminate"]]]
+
+
+logger = get_logger("ft.controller")
 
 
 @dataclass(frozen=True, eq=True)
@@ -69,6 +73,19 @@ class FineTuneRequest:
             hyperparams=tuple((k, v) for k, v in hyperparams.items()),
         )
 
+    def __repr__(self) -> str:  # noqa: D401
+        hyperparams = ", ".join(f"{k}={v}" for k, v in dict(self.hyperparams).items())
+        dataset_hash = hash(self.train_ds)
+        base = (
+            f"FineTuneRequest(model={self.model_name}, ds_hash={dataset_hash}, "
+            f"lr={self.learning_rate}, batch={self.batch_size}, epochs={self.n_epochs}"
+        )
+        if self.salt:
+            base += f", salt={self.salt}"
+        if hyperparams:
+            base += f", hyperparams={{{hyperparams}}}"
+        return base + ")"
+
 
 class FineTuneController:
     def __init__(
@@ -105,12 +122,27 @@ class FineTuneController:
 
     async def start(self) -> None:
         if self._submission_loop and self._retry_submission_loop and self._status_poller:
+            logger.warning("start called but controller is already running.")
             return
 
-        self._status_poller = asyncio.create_task(self._poll_status())
-        self._submission_loop = asyncio.create_task(self._handle_queue(self._queue))
+        logger.info(
+            "Starting FineTuneController with max_concurrent=%s, poll_interval=%ss.",
+            self.max_concurrent,
+            self.poll_status_interval,
+        )
+
+        self._status_poller = asyncio.create_task(self._poll_status(), name="ft-status-poller")
+        self._submission_loop = asyncio.create_task(
+            self._handle_queue(self._queue, queue_name="primary"),
+            name="primary-loop",
+        )
         self._retry_submission_loop = asyncio.create_task(
-            self._handle_queue(self._retry_queue, self.retry_submission_interval)
+            self._handle_queue(
+                self._retry_queue,
+                self.retry_submission_interval,
+                queue_name="retry",
+            ),
+            name="retry-loop",
         )
 
         for _, row in self._inflight_store._page.iterrows():
@@ -126,8 +158,14 @@ class FineTuneController:
 
             self._inflight[request] = job
             self._futures[request] = asyncio.get_event_loop().create_future()
+            logger.debug(
+                "Recovered inflight job %s for request %s from persistent cache.",
+                job.id,
+                request,
+            )
 
         self._ready.set()
+        logger.info("FineTuneController is ready. %d inflight job(s) found.", len(self._inflight))
 
     async def stop(self) -> None:
         self._stop_poller.set()
@@ -151,38 +189,79 @@ class FineTuneController:
         self._ready.clear()
         self._stop_poller.clear()
 
+        logger.info("FineTuneController stopped.")
+
     async def submit(
         self, request: FineTuneRequest, priority: float = 0.0
     ) -> asyncio.Future[ModelRef]:
-        assert self._ready.is_set(), "Controller is not ready"
+        if not self._ready.is_set():
+            raise RuntimeError("Controller is not ready")
 
         if request in self._futures:
+            logger.debug("Reusing existing future for request %s.", request)
             return self._futures[request]
 
         fut: asyncio.Future[ModelRef] = asyncio.get_event_loop().create_future()
         self._futures[request] = fut
         await self._queue.put((priority, next(self._queue_order), request))
 
+        logger.debug(
+            "Queued fine-tune request %s with priority %.2f. queue_size=%d",
+            request,
+            priority,
+            self._queue.qsize(),
+        )
+
         return fut
 
-    async def _handle_queue(self, queue: RequestQueue, sleep_before: float = 0.0) -> None:
+    async def _handle_queue(
+        self,
+        queue: RequestQueue,
+        sleep_before: float = 0.0,
+        *,
+        queue_name: str,
+    ) -> None:
         await self._ready.wait()
 
         while True:
             _, _, request = await queue.get()
             try:
                 if request == "terminate":
+                    logger.debug("Received termination sentinel on %s queue.", queue_name)
                     break
                 if request in self._inflight:
+                    logger.debug(
+                        "Request %s already inflight; skipping submission on %s queue.",
+                        request,
+                        queue_name,
+                    )
                     continue
                 if request not in self._futures:
-                    print(f"Request {request} does not have a corresponding future.")
+                    logger.warning(
+                        "Request %s retrieved from %s queue without a tracked future; dropping.",
+                        request,
+                        queue_name,
+                    )
                     continue
                 if sleep_before > 1e-8:
+                    logger.debug(
+                        "Sleeping %.2fs before retrying request %s from %s queue.",
+                        sleep_before,
+                        request,
+                        queue_name,
+                    )
                     await asyncio.sleep(sleep_before)
+
+                logger.debug(
+                    "Attempting fine-tune submission for %s via %s queue.", request, queue_name
+                )
 
                 job = await self._attempt_ft(request)
                 if job is None:
+                    logger.debug(
+                        "Submission for %s did not succeed; enqueueing on retry queue.",
+                        request,
+                    )
                     await self._retry_queue.put((0, next(self._queue_order), request))
                 else:
                     self._inflight[request] = job
@@ -191,6 +270,11 @@ class FineTuneController:
                         job.serialize(),
                     )
                     await asyncio.to_thread(self._inflight_store.flush)
+                    logger.info(
+                        "Submitted fine-tune request %s; OpenAI job id=%s.",
+                        request,
+                        job.id,
+                    )
             finally:
                 queue.task_done()
 
@@ -207,7 +291,12 @@ class FineTuneController:
         for key in keys:
             service = OpenAIFineTuneService(service_key=key)
             try:
-                return await service.create_job(
+                logger.debug(
+                    "Submitting fine-tune request %s using OpenAI key ending with %s.",
+                    request,
+                    key[-4:] if len(key) >= 4 else "***",
+                )
+                job = await service.create_job(
                     request.model_name,
                     train_ds=request.train_ds,
                     learning_rate=request.learning_rate,
@@ -215,12 +304,21 @@ class FineTuneController:
                     n_epochs=request.n_epochs,
                     **dict(request.hyperparams),
                 )
+                logger.debug(
+                    "Fine-tune request %s accepted by OpenAI job id=%s.",
+                    request,
+                    job.id,
+                )
+                return job
             except RateLimitError:
-                print("Rate limit error", request)
+                logger.warning(
+                    "Rate limit encountered when submitting request %s with current OpenAI key.",
+                    request,
+                )
                 continue
             except Exception as e:
-                print(f"Error submitting job: {e}")
-                raise e
+                logger.exception("Unexpected error while submitting request %s: %s", request, e)
+                raise
 
         return job
 
@@ -232,6 +330,14 @@ class FineTuneController:
         ft_service_key = stale_job.service_identifier
         ft_service = OpenAIFineTuneService(service_key=ft_service_key)
         job = await ft_service.get_job(stale_job.id)
+
+        logger.debug(
+            "Polled job %s for request %s. Previous status=%s, new status=%s.",
+            job.id,
+            request,
+            stale_job.status,
+            job.status,
+        )
 
         self._inflight[request] = job
         self._inflight_store.put(
@@ -256,8 +362,15 @@ class FineTuneController:
                     model_ref.serialize(),
                 )
                 await asyncio.to_thread(model_store.flush)
+                logger.info(
+                    "Fine-tune job %s completed for request %s. Model slug=%s.",
+                    job.id,
+                    request,
+                    model_ref.slug,
+                )
                 future.set_result(model_ref)
             else:
+                logger.error("Fine-tune job %s failed for request %s.", job.id, request)
                 future.set_exception(RuntimeError(f"Fine-tune job {job.id} failed"))
 
     async def _poll_status(self) -> None:
@@ -266,6 +379,7 @@ class FineTuneController:
         await self._ready.wait()
 
         while not self._stop_poller.is_set():
+            logger.debug("Polling status for %d inflight request(s).", len(self._inflight))
             await asyncio.gather(
                 *(self._poll_request(request) for request in self._inflight.keys()),
                 return_exceptions=True,
@@ -279,10 +393,16 @@ class FineTuneController:
                 self._inflight.pop(request)
                 self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
+                logger.debug(
+                    "Cleaned up completed request %s and removed it from persistence.",
+                    request,
+                )
 
                 ds_path = storage_subdir("ft", "datasets") / f"{hash(request.train_ds)}.jsonl"
                 if ds_path.exists():
                     ds_path.unlink()
+                    logger.debug("Removed cached dataset for request %s at %s.", request, ds_path)
 
             if not self._stop_poller.is_set():
+                logger.debug("Sleeping %.2fs before next status poll.", self.poll_status_interval)
                 await asyncio.sleep(self.poll_status_interval)
