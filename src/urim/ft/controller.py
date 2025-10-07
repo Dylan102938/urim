@@ -398,10 +398,28 @@ class FineTuneController:
                     request,
                 )
 
-                ds_path = storage_subdir("ft", "datasets") / f"{hash(request.train_ds)}.jsonl"
+                dataset_hash = hash(request.train_ds)
+                ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
                 if ds_path.exists():
-                    ds_path.unlink()
-                    logger.debug("Removed cached dataset for request %s at %s.", request, ds_path)
+                    shared_inflight = any(
+                        hash(other_request.train_ds) == dataset_hash
+                        for other_request in self._inflight
+                        if other_request not in stale
+                    )
+                    if shared_inflight:
+                        logger.debug(
+                            "Keeping cached dataset for request %s; inflight job still uses"
+                            " hash %s.",
+                            request,
+                            dataset_hash,
+                        )
+                    else:
+                        ds_path.unlink()
+                        logger.debug(
+                            "Removed cached dataset for request %s at %s.",
+                            request,
+                            ds_path,
+                        )
 
             if not self._stop_poller.is_set():
                 logger.debug("Sleeping %.2fs before next status poll.", self.poll_status_interval)
