@@ -118,7 +118,7 @@ class OpenAIFineTuneService(FineTuneService):
         buffer = io.BytesIO()
         df = dataset.df()
         logger.debug("Uploading training dataset with %d row(s) for fine-tuning.", len(df))
-        df.to_json(buffer)
+        df.to_json(buffer, orient="records", lines=True)
         buffer.seek(0)
 
         upload = await self._client.files.create(
