@@ -404,6 +404,7 @@ class FineTuneController:
 
                 self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
+
                 dataset_hash = hash(request.train_ds)
                 ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
                 if ds_path.exists():
