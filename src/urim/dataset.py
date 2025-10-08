@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -375,6 +375,12 @@ class Dataset:
                 df[f"{k}_{extra_k}"] = v
 
         return self._maybe_inplace(df, inplace=inplace)
+
+    @classmethod
+    def concatenate(cls, datasets: Iterable[Dataset], **kwargs: Any) -> Dataset:
+        datasets = list(datasets)
+        frames = [dataset._df for dataset in datasets]
+        return cls(pd.concat(frames, axis=0, **kwargs))
 
     def concatenate(
         self, other: Dataset | list[Dataset], *, inplace: bool = False, **kwargs: Any
