@@ -326,10 +326,14 @@ class FineTuneController:
         from urim.ft.service import FineTuneJobStatus
         from urim.model import ModelRef, get_ft_store
 
-        stale_job = self._inflight[request]
-        ft_service_key = stale_job.service_identifier
-        ft_service = OpenAIFineTuneService(service_key=ft_service_key)
-        job = await ft_service.get_job(stale_job.id)
+        try:
+            stale_job = self._inflight[request]
+            ft_service_key = stale_job.service_identifier
+            ft_service = OpenAIFineTuneService(service_key=ft_service_key)
+            job = await ft_service.get_job(stale_job.id)
+        except Exception as e:
+            logger.exception("Unexpected error while polling request %s: %s", request, e)
+            return None
 
         logger.debug(
             "Polled job %s for request %s. Previous status=%s, new status=%s.",
