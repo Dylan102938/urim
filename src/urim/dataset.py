@@ -285,6 +285,7 @@ class Dataset:
         messages_col: str | None = None,
         system_col: str | None = None,
         out_col: str | None = None,
+        salt_col: str | None = None,
         question_type: type[Question] | None = None,
         model: str = PRESET_BALANCED,
         *,
@@ -301,6 +302,7 @@ class Dataset:
         messages_col = messages_col or "messages"
         system_col = system_col or "system"
         out_col = out_col or "answer"
+        salt_col = salt_col or "salt"
 
         input_col = (question_col in self._df.columns and question_col) or (
             messages_col in self._df.columns and messages_col
@@ -318,6 +320,8 @@ class Dataset:
                 if system_col in self._df.columns
                 else common_system
             )
+            common_salt = question_kwargs.pop("salt", None)
+            salt = str(self._df.iloc[i][salt_col]) if salt_col in self._df.columns else common_salt
             question_input: dict[str, Any]
             if input_col == messages_col:
                 question_input = {"messages": inp}
@@ -327,6 +331,7 @@ class Dataset:
             questions.append(
                 question_type(
                     system=system,
+                    salt=salt,
                     **question_input,
                     **question_kwargs,
                 )
