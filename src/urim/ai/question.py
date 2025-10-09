@@ -44,6 +44,7 @@ class Question(ABC, Generic[EvalType]):
         messages: list[dict] | None = None,
         system: str | None = None,
         enable_cache: bool = True,
+        salt: str = "",
         **kwargs: Any,
     ) -> None:
         assert not prompt or not messages, "Cannot specify both prompt and messages"
@@ -52,6 +53,7 @@ class Question(ABC, Generic[EvalType]):
         self.messages = messages
         self.system = system
         self.enable_cache = enable_cache
+        self.salt = salt
         self.kwargs = kwargs
 
     def __str__(self) -> str:
