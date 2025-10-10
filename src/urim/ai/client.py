@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import logging
 import math
-import os
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import backoff
 import openai
-from dotenv import load_dotenv
 from openai.types.chat import ChatCompletion
 
 from urim.env import OPENROUTER_API_KEY, OPENROUTER_BASE_URL
+from urim.logging import get_logger
 
-LOGGER = logging.getLogger("urim.core.ai.client")
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
-load_dotenv()
+logger = get_logger("ai.client")
 
 
-@dataclass
+@dataclass(frozen=True)
 class ChatResult:
     content: str | None
     raw: dict[str, Any]
@@ -37,7 +36,7 @@ class LLM:
         self.api_key = api_key
         self.timeout = timeout
 
-    def chat_completion(
+    async def chat_completion(
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
@@ -49,15 +48,24 @@ class LLM:
             raise ValueError("Either messages or prompt must be provided")
 
         final_messages = messages if messages is not None else _prompt_to_messages(prompt or "")
-        return self._request(
+        logger.debug(
+            "LLM.chat_completion request: model=%s, messages=%s",
+            model,
+            final_messages,
+        )
+        return await self._request(
             model=model,
             messages=final_messages,
             convert_to_probs=convert_to_probs,
             **kwargs,
         )
 
-    def _build_client(self, model: str) -> openai.Client:
-        openai_keys = _collect_openai_keys(explicit_key=self.api_key)
+    async def _build_client(self, model: str) -> AsyncOpenAI:
+        from openai import AsyncOpenAI
+
+        from urim.env import collect_openai_keys
+
+        openai_keys = collect_openai_keys(explicit_key=self.api_key)
         openrouter_keys = [self.api_key or OPENROUTER_API_KEY]
         custom_keys = [self.api_key] if self.api_key else []
 
@@ -84,21 +92,38 @@ class LLM:
         )
 
         for key, base_url in openai_setup + openrouter_setup + custom_setup:
-            client = openai.OpenAI(
+            client = AsyncOpenAI(
                 api_key=key,
                 base_url=base_url,
                 timeout=self.timeout,
             )
 
-            is_client_valid = _test_client(client, model)
+            logger.debug(
+                "Testing LLM client for model=%s using base_url=%s key_suffix=%s.",
+                model,
+                base_url or "openai",
+                key[-4:] if key else "None",
+            )
+            is_client_valid = await _test_client(client, model)
             if not is_client_valid:
+                logger.debug(
+                    "Skipping client for model=%s using base_url=%s; validation failed.",
+                    model,
+                    base_url or "openai",
+                )
                 continue
 
+            logger.debug(
+                "Selected client for model=%s using base_url=%s.",
+                model,
+                base_url or "openai",
+            )
             return client
 
+        logger.error("No valid client configuration found for model=%s.", model)
         raise RuntimeError("No valid client found")
 
-    def _request(
+    async def _request(
         self,
         *,
         model: str,
@@ -106,12 +131,23 @@ class LLM:
         convert_to_probs: bool = True,
         **kwargs: Any,
     ) -> ChatResult:
-        client = self._build_client(model)
-        resp = openai_chat_completion(
+        client = await self._build_client(model)
+        logger.debug(
+            "Dispatching chat completion to provider: model=%s, messages=%s, extra_args=%s",
+            model,
+            messages,
+            kwargs,
+        )
+        resp = await openai_chat_completion(
             client,
             model=model,
             messages=messages,
             **kwargs,
+        )
+        logger.debug(
+            "Received chat completion response for model=%s: message=%s",
+            model,
+            resp.choices[0].message.content if resp.choices else None,
         )
 
         logprobs_dict: dict[str, float] | None = None
@@ -133,7 +169,12 @@ class LLM:
 def _on_backoff(details: Any) -> None:
     exception_details = details["exception"]
     if not str(exception_details).startswith("Connection error."):
-        print(exception_details)
+        logger.warning(
+            "LLM backoff triggered by exception: %s (tries=%s, next_wait=%s).",
+            exception_details,
+            details.get("tries"),
+            details.get("wait"),
+        )
 
 
 @backoff.on_exception(
@@ -148,11 +189,11 @@ def _on_backoff(details: Any) -> None:
     factor=1.5,
     on_backoff=_on_backoff,
 )
-def openai_chat_completion(client: openai.Client, *args: Any, **kwargs: Any) -> ChatCompletion:
-    return client.chat.completions.create(*args, **kwargs)
+async def openai_chat_completion(client: AsyncOpenAI, *args: Any, **kwargs: Any) -> ChatCompletion:
+    return await client.chat.completions.create(*args, **kwargs)
 
 
-def _test_client(client: openai.Client, model: str) -> bool:
+async def _test_client(client: AsyncOpenAI, model: str) -> bool:
     try:
         kwargs = {
             "model": model,
@@ -162,7 +203,7 @@ def _test_client(client: openai.Client, model: str) -> bool:
         if not model.startswith("o") and not model.startswith("gpt-5"):
             kwargs["max_tokens"] = 1
 
-        openai_chat_completion(client, **kwargs)
+        await openai_chat_completion(client, **kwargs)
         return True
     except (
         openai.NotFoundError,
@@ -171,26 +212,6 @@ def _test_client(client: openai.Client, model: str) -> bool:
         openai.AuthenticationError,
     ):
         return False
-
-
-def _collect_openai_keys(*, explicit_key: str | None = None) -> list[str]:
-    keys: list[str] = []
-    if explicit_key:
-        keys.append(explicit_key)
-    primary = os.environ.get("OPENAI_API_KEY")
-    if primary:
-        keys.append(primary)
-    for i in range(0, 10):
-        k = os.environ.get(f"OPENAI_API_KEY_{i}")
-        if k:
-            keys.append(k)
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for k in keys:
-        if k not in seen:
-            ordered.append(k)
-            seen.add(k)
-    return ordered
 
 
 def _prompt_to_messages(prompt: str) -> list[dict[str, str]]:

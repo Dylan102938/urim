@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -26,7 +28,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
 
     skip_marker = pytest.mark.skip(
-        reason=("requires_llm disabled. Enable with --requires-llm or URIM_TEST_REQUIRES_LLM=1")
+        reason="requires_llm disabled. Enable with --requires-llm or URIM_TEST_REQUIRES_LLM=1"
     )
     for item in items:
         if "requires_llm" in item.keywords:
@@ -43,7 +45,12 @@ def requires_llm_test(func: pytest.Function) -> pytest.MarkDecorator:  # noqa: A
     return pytest.mark.requires_llm(func)
 
 
-# Back-compat: keep the fixture if some tests still import it
 @pytest.fixture(scope="session")
 def requires_llm(request: pytest.FixtureRequest) -> Iterator[bool]:
     yield _is_llm_enabled_from_config(request.config)
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_SRC_PATH = _PROJECT_ROOT / "src"
+if str(_SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(_SRC_PATH))

@@ -1,367 +1,346 @@
 from __future__ import annotations
 
-import hashlib
-import shutil
+import asyncio
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from enum import Enum
+from collections.abc import Callable, Hashable, Mapping, Sequence
+from numbers import Real
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
-from datasets import Dataset as HFDataset
-from datasets import load_dataset
-from typing_extensions import Self
 
-from urim.ai.prompts import (
-    DATASET_APPLY_PROMPT,
-    DATASET_CONCAT_HINT_PROMPT,
-    DATASET_CONCAT_NO_HINT_PROMPT,
-    DATASET_DROP_NO_HINT_PROMPT,
-    DATASET_DROP_WITH_HINT_PROMPT,
-    DATASET_FILTER_PROMPT,
-    DATASET_MERGE_HINT_PROMPT,
-    DATASET_MERGE_NO_HINT_PROMPT,
-    DATASET_RENAME_PROMPT,
-    GENERATE_DESCRIBE_CHAIN_PROMPT,
-)
-from urim.ai.question import ExtractFunction, ExtractJSON, FreeForm, Question
-from urim.env import URIM_HOME
-from urim.logging_utils import logger
+if TYPE_CHECKING:
+    from urim.ai.question import Question
 
-Axis = int | Literal["index", "columns", "rows"]
-Renamer = Mapping[Any, Hashable]
+QuestionFactory = Callable[["pd.Series"], "Question"] | str
+
+PRESET_FAST = "gpt-4.1-mini"
+PRESET_BALANCED = "gpt-4.1"
+PRESET_THOROUGH = "gpt-5"
 
 
-class ModelPreset(str, Enum):
-    FAST = "gpt-4.1-mini"
-    BALANCED = "gpt-4.1"
-    THOROUGH = "gpt-5"
+async def extract_op_kwargs(
+    template: str,
+    model: str,
+    *,
+    curr_df: pd.DataFrame | None = None,
+    question_kwargs: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    from urim.ai.question import ExtractJSON
+
+    if curr_df is not None:
+        if len(curr_df) < 5:
+            rows = curr_df
+        else:
+            rows = curr_df.iloc[:: len(curr_df) // 5]
+        prompt = template.format(**{"head": rows.head(), **kwargs})
+    else:
+        prompt = template.format(**kwargs)
+
+    for _ in range(3):
+        question: ExtractJSON
+        try:
+            question = ExtractJSON(prompt, **(question_kwargs or {}))
+            return await question.json(model)
+        except Exception:
+            question.remove_from_cache(model)
+
+    raise Exception("Failed to extract kwargs")
 
 
-def get_hf_dataset_local_id(**kwargs: Any) -> str:
-    sorted_keys = sorted(kwargs.keys())
-    semantic_id = "_".join(f"{k}={kwargs[k]}" for k in sorted_keys)
-    serialized_id = hashlib.sha256(semantic_id.encode()).hexdigest()
+async def extract_op_fn(
+    template: str,
+    model: str,
+    *,
+    curr_df: pd.DataFrame | None = None,
+    question_kwargs: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Callable[..., Any]:
+    from urim.ai.question import ExtractFunction
 
-    return serialized_id
+    if curr_df is not None:
+        if len(curr_df) < 5:
+            rows = curr_df
+        else:
+            rows = curr_df.iloc[:: len(curr_df) // 5]
+        prompt = template.format(**{"head": rows.head(), **kwargs})
+    else:
+        prompt = template.format(**kwargs)
 
+    for _ in range(3):
+        question: ExtractFunction
+        try:
+            question = ExtractFunction(prompt, **(question_kwargs or {}))
+            return await question.fn(model)
+        except Exception:
+            question.remove_from_cache(model)
 
-def get_dataset_local_id(path: Path) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read(200 * 1024)).hexdigest()
+    raise Exception("Failed to extract fn")
 
 
 class Dataset:
-    def __init__(self, input_path: str | None = None, df: pd.DataFrame | None = None):
-        assert input_path is not None or df is not None, "Must provide either a path or a DataFrame"
-        self.path = input_path
-        self._df = df
+    def __init__(self, dataset: pd.DataFrame | str | Path, **kwargs: Any):
+        import pandas as pd
+        from datasets import load_dataset
+
+        self._df: pd.DataFrame
+        if isinstance(dataset, str | Path):
+            path = Path(dataset)
+            if path.exists():
+                self._df = pd.read_json(path, orient="records", lines=True, **kwargs)
+            elif isinstance(dataset, str):
+                self._df = load_dataset(dataset, **kwargs).to_pandas()
+            else:
+                msg = f"Dataset path {path} does not exist"
+                raise FileNotFoundError(msg)
+        else:
+            self._df = dataset
+
+        self._init_dataset_kwargs = kwargs
+
+    def __hash__(self) -> int:
+        from blake3 import blake3
+        from pandas.util import hash_pandas_object
+
+        hasher = blake3()
+        df = _normalize_dataframe(self._df)
+
+        for key, mul in [
+            ("0123456789ABCDEF", 0x9E3779B97F4A7C15),
+            ("23456789ABCDEFGH", 0xBF58476D1CE4E5B9),
+        ]:
+            h = hash_pandas_object(df, index=False, hash_key=key).to_numpy(np.uint64)
+            s = int(h.sum(dtype=np.uint64))
+            sw = int((h * np.uint64(mul)).sum(dtype=np.uint64))
+
+            hasher.update(s.to_bytes(8, "big", signed=False))
+            hasher.update(sw.to_bytes(8, "big", signed=False))
+
+        return int.from_bytes(hasher.digest(length=16), "big")
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Dataset):
+            return False
+
+        return hash(self) == hash(other)
 
     def df(self) -> pd.DataFrame:
-        if self._df is None:
-            assert self.path is not None
-            self._df = pd.read_json(self.path, lines=True)
-
         return self._df
 
-    def to_json(self, output_path: str) -> None:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        self.df().to_json(output_path, orient="records", lines=True)
+    def to_json(self, out_path: str | Path) -> None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        self._df.to_json(out_path, orient="records", lines=True)
 
-    def sample(self, n: int | None = None, frac: float | None = None, **kwargs: Any) -> Self:
-        assert n is not None or frac is not None, "Must provide either n or frac"
-
-        self._df = self.df().sample(n=n, frac=frac, **kwargs)
-        return self
-
-    def rename(
+    def sample(
         self,
-        columns: Renamer | None = None,
+        n: int | None = None,
+        frac: float | None = None,
+        *,
+        inplace: bool = False,
+        **kwargs: Any,
+    ) -> Dataset:
+        if frac is not None and frac > 1:
+            frac = frac / 100
+
+        df = self._df.sample(n=n, frac=frac, **kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
+
+    async def rename(
+        self,
+        columns: Mapping[Any, Hashable] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST.value,
-    ) -> Self:
-        assert columns is not None or hint is not None
-        df = self.df()
+        model: str = PRESET_FAST,
+        *,
+        inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dataset:
+        from urim.ai.prompts import DATASET_RENAME_PROMPT
+
         if columns is None:
-            assert hint is not None, "Must provide a hint if no columns are provided"
-            question = ExtractJSON(
-                prompt=DATASET_RENAME_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
+            assert hint is not None
+            kwargs = {
+                **kwargs,
+                "columns": await extract_op_kwargs(
+                    DATASET_RENAME_PROMPT,
+                    columns=", ".join(self._df.columns),
                     scheme=hint,
-                )
-            )
-            columns = question.json(model)
+                    model=model,
+                    curr_df=self._df,
+                    question_kwargs=question_kwargs,
+                ),
+            }
+        else:
+            kwargs = {
+                "columns": columns,
+                **kwargs,
+            }
 
-        self._df = df.rename(columns=columns)
-        return self
+        df = self._df.rename(**kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
-    def drop(
+    async def drop(
         self,
-        columns: list[str] | None = None,
+        columns: list[str] | str | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.FAST.value,
-    ) -> Self:
+        model: str = PRESET_FAST,
+        *,
+        inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dataset:
+        from urim.ai.prompts import (
+            DATASET_DROP_NO_HINT_PROMPT,
+            DATASET_DROP_WITH_HINT_PROMPT,
+        )
+
         assert columns is not None or hint is not None, "Must provide either columns or hint"
 
-        df = self.df()
         if columns is None:
-            drop_prompt = (
-                DATASET_DROP_NO_HINT_PROMPT if hint is None else DATASET_DROP_WITH_HINT_PROMPT
+            add_kwargs = await extract_op_kwargs(
+                DATASET_DROP_WITH_HINT_PROMPT if hint else DATASET_DROP_NO_HINT_PROMPT,
+                columns=", ".join(self._df.columns),
+                scheme=hint,
+                model=model,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
             )
-            question = ExtractJSON(
-                prompt=drop_prompt.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
-                    scheme=hint,
-                )
-            )
-            columns = question.json(model).get("columns", [])
+            kwargs = {
+                **kwargs,
+                **add_kwargs,
+            }
+        else:
+            kwargs = {
+                "columns": columns,
+                **kwargs,
+            }
 
-        self._df = df.drop(columns=columns)
-        return self
+        df = self._df.drop(**kwargs)
+        return self._maybe_inplace(df, inplace=inplace)
 
-    def filter(
+    async def filter(
         self,
         fn: Callable[[pd.Series], bool] | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
+        model: str = PRESET_BALANCED,
+        *,
+        inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dataset:
+        from urim.ai.prompts import DATASET_FILTER_PROMPT
+
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
-        df = self.df()
         if fn is None:
-            assert hint is not None, "Must provide a hint if no function is provided"
-            question = ExtractFunction(
-                DATASET_FILTER_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
-                    scheme=hint,
-                )
+            fn = await extract_op_fn(
+                DATASET_FILTER_PROMPT,
+                columns=", ".join(self._df.columns),
+                scheme=hint,
+                model=model,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
             )
-            fn = question.fn(model)
 
-        self._df = df[df.apply(fn, axis=1)]
-        return self
+        df = self._df.loc[self._df.apply(fn, axis=1, **kwargs), :]
+        return self._maybe_inplace(df, inplace=inplace)
 
-    def apply(
+    async def apply(
         self,
         fn: Callable[[pd.Series], Any] | None = None,
         column: str | None = None,
         hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
+        model: str = PRESET_BALANCED,
+        *,
+        inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dataset:
+        from urim.ai.prompts import DATASET_APPLY_PROMPT
+
         assert fn is not None or hint is not None, "Must provide either fn or hint"
 
-        df = self.df()
-        fn_callable: Callable[[pd.Series], Any]
         if fn is None:
-            assert hint is not None, "Must provide a hint if no function is provided"
-            question = ExtractFunction(
-                prompt=DATASET_APPLY_PROMPT.format(
-                    columns=", ".join(df.columns),
-                    head=df.head(5),
-                    scheme=hint,
-                    column_hint=(
-                        f"The column's name should be {column}." if column is not None else ""
-                    ),
-                )
-            )
-            wrapper_fn = question.fn(model)
-            gen_column, gen_fn = cast(tuple[str, Callable[[pd.Series], Any]], wrapper_fn())
-            column, fn_callable = gen_column, gen_fn
-        else:
-            fn_callable = fn
-
-        assert column is not None, "Must provide a column name"
-        df[column] = df.apply(fn_callable, axis=1)
-
-        return self
-
-    def merge(
-        self,
-        other: Self,
-        on: str | list[str] | None = None,
-        left_on: str | list[str] | None = None,
-        right_on: str | list[str] | None = None,
-        how: Literal["left", "right", "inner", "outer", "cross"] = "left",
-        hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-        **kwargs: Any,
-    ) -> Self:
-        df, other_df = self.df(), other.df()
-        ons_none = on is None and left_on is None and right_on is None
-        merge_args = {
-            "on": on,
-            "left_on": left_on,
-            "right_on": right_on,
-            "how": how,
-        }
-
-        merge_hint = ""
-        if hint is not None:
-            merge_hint += hint
-        if not ons_none and merge_hint:
-            defined_args = [f"{k}={v}" for k, v in merge_args.items() if v is not None]
-            merge_hint += f"\n\nI've already set the following args: {', '.join(defined_args)}"
-        if merge_hint:
-            merge_template = (
-                DATASET_MERGE_NO_HINT_PROMPT if hint is None else DATASET_MERGE_HINT_PROMPT
-            )
-
-            question = ExtractJSON(
-                prompt=merge_template.format(
-                    columns=", ".join(df.columns),
-                    other_columns=", ".join(other_df.columns),
-                    head=df.head(5),
-                    other_head=other_df.head(5),
-                    scheme=merge_hint,
-                )
-            )
-
-            json = question.json(model)
-            on = json.get("on")
-            left_on = json.get("left_on")
-            right_on = json.get("right_on")
-            how = json.get("how", "left")
-
-        self._df = df.merge(
-            other_df,
-            on=on,
-            left_on=left_on,
-            right_on=right_on,
-            how=how,
-            **kwargs,
-        )
-
-        return self
-
-    def concat(
-        self,
-        other: Self,
-        hint: str | None = None,
-        model: str = ModelPreset.BALANCED.value,
-    ) -> Self:
-        df, other_df = self.df(), other.df()
-        columns = set(df.columns)
-        other_columns = set(other_df.columns)
-        col_diff = columns - other_columns
-
-        if len(col_diff) > 0 or hint is not None:
-            concat_prompt = (
-                DATASET_CONCAT_NO_HINT_PROMPT if hint is None else DATASET_CONCAT_HINT_PROMPT
-            )
-            question = ExtractJSON(
-                prompt=concat_prompt.format(
-                    columns=", ".join(df.columns),
-                    other_columns=", ".join(other_df.columns),
-                    head=df.head(5),
-                    other_head=other_df.head(5),
-                    scheme=hint,
-                )
-            )
-            json: dict[str, str] = question.json(model)
-            df1_columns, df2_columns = {}, {}
-            for k, v in json.items():
-                if k.startswith("df1_"):
-                    df1_columns[k.removeprefix("df1_")] = v
-                elif k.startswith("df2_"):
-                    df2_columns[k.removeprefix("df2_")] = v
-
-            df = df.rename(columns=df1_columns)
-            other_df = other_df.rename(columns=df2_columns)
-
-        self._df = pd.concat([df, other_df], axis=0)
-
-        return self
-
-    def describe(self, hint: str, model: str = ModelPreset.BALANCED.value) -> Self:
-        question = FreeForm(
-            prompt=GENERATE_DESCRIBE_CHAIN_PROMPT.format(
-                columns=", ".join(self.df().columns),
-                head=self.df().head(5),
+            wrapper_fn = await extract_op_fn(
+                DATASET_APPLY_PROMPT,
+                columns=", ".join(self._df.columns),
+                column_hint=f"The column's name should be {column}." if column is not None else "",
                 scheme=hint,
-            ),
-        )
+                model=model,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
+            )
+            column, fn = wrapper_fn()
 
-        answer, _ = question.resolve(model)
-        for fn in answer.split("\n"):
-            self._execute_describe_fn(fn)
+        df = self._df.copy()
+        df[column] = df.apply(fn, axis=1, **kwargs)
 
-        return self
+        return self._maybe_inplace(df, inplace=inplace)
 
-    def generate(
+    async def generate(
         self,
         question_col: str | None = None,
         messages_col: str | None = None,
         system_col: str | None = None,
         out_col: str | None = None,
-        question_type: type[Question] = FreeForm,
-        model: str = ModelPreset.BALANCED.value,
+        salt_col: str | None = None,
+        question_type: type[Question] | None = None,
+        model: str = PRESET_BALANCED,
+        *,
+        judges: dict[str, QuestionFactory] | None = None,
         max_workers: int = 100,
+        inplace: bool = False,
         **question_kwargs: Any,
-    ) -> Self:
+    ) -> Dataset:
+        from urim.ai.question import FreeForm, Rating
+
+        ### Generate questions using dataframes and defaults ###
+
         question_col = question_col or "question"
         messages_col = messages_col or "messages"
         system_col = system_col or "system"
         out_col = out_col or "answer"
+        salt_col = salt_col or "salt"
 
-        df = self.df()
+        input_col = (question_col in self._df.columns and question_col) or (
+            messages_col in self._df.columns and messages_col
+        )
 
-        if messages_col not in df and question_col not in df:
-            self.rename(
-                hint=(
-                    "Pick one column that is the likeliest to contain either questions"
-                    " or a list of messages that fit the OpenAI chat completion"
-                    f" format. Rename that column to `{question_col}` if it contains"
-                    f" strings and `{messages_col}` if it contains OpenAI-style chat"
-                    " completion messages."
-                )
-            )
-            df = self.df()
+        assert input_col in self._df.columns
 
-        if messages_col not in df:
-            assert question_col in df, (
-                "Both question and messages columns are missing, need at least one"
-            )
-            questions_iter = df[question_col].to_list()
-        else:
-            questions_iter = df[messages_col].to_list()
-
+        input_iter = self._df[input_col].to_list()
         questions: list[Question] = []
-        for i, question in enumerate(questions_iter):
+        question_type = question_type or FreeForm
+        for i, inp in enumerate(input_iter):
             common_system = question_kwargs.pop("system", None)
-            system = str(df.iloc[i][system_col]) if system_col in df else common_system
+            system = (
+                str(self._df.iloc[i][system_col])
+                if system_col in self._df.columns
+                else common_system
+            )
+            common_salt = question_kwargs.pop("salt", None)
+            salt = str(self._df.iloc[i][salt_col]) if salt_col in self._df.columns else common_salt
+            question_input: dict[str, Any]
+            if input_col == messages_col:
+                question_input = {"messages": inp}
+            else:
+                question_input = {"prompt": inp}
+
             questions.append(
                 question_type(
-                    prompt=question,
                     system=system,
+                    salt=salt,
+                    **question_input,
                     **question_kwargs,
                 )
             )
 
-        num_questions = len(questions)
-        results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
+        ### Resolve questions and add to dataframe ###
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {
-                executor.submit(question.resolve, model): idx
-                for idx, question in enumerate(questions)
-            }
-
-            with logger.pbar() as progress:
-                task_id = progress.add_task("Generating…", total=num_questions)
-                for future in as_completed(future_to_index):
-                    idx = future_to_index[future]
-                    try:
-                        results[idx] = future.result()
-                    except Exception as exc:
-                        results[idx] = ("", {"error": str(exc)})
-                    finally:
-                        progress.advance(task_id, 1)
-
+        results = await self._resolve_questions(model, questions, max_workers)
+        df = self._df.copy()
         df[out_col] = [result[0] for result in results]
 
         extra_columns: dict[str, list[Any]] = defaultdict(list)
@@ -372,96 +351,230 @@ class Dataset:
         for k, v in extra_columns.items():
             df[k] = v
 
-        return self
+        if judges is None:
+            return self._maybe_inplace(df, inplace=inplace)
+
+        ### Generate judge questions ###
+
+        judge_questions: dict[str, list[Question]] = defaultdict(list)
+        for _, row in df.iterrows():
+            for k, factory in judges.items():
+                judge_questions[k].append(
+                    Rating(prompt=factory.format(**row.to_dict()), **question_kwargs)
+                    if isinstance(factory, str)
+                    else factory(row)
+                )
+
+        ### Resolve judge questions and add to dataframe ###
+
+        judge_results = await self._resolve_judge_questions(model, judge_questions, max_workers)
+        for k, results in judge_results.items():
+            df[k] = [result[0] for result in results]
+            extra_columns = defaultdict(list)
+
+            for extra in [result[1] for result in results]:
+                for extra_k, v in extra.items():
+                    extra_columns[extra_k].append(v)
+
+            for extra_k, v in extra_columns.items():
+                df[f"{k}_{extra_k}"] = v
+
+        return self._maybe_inplace(df, inplace=inplace)
 
     @classmethod
-    def is_valid_id(cls, id: str) -> bool:
-        path = URIM_HOME / "datasets" / f"{id}.jsonl"
-        return path.exists()
+    def concatenate(cls, *datasets: Dataset, **kwargs: Any) -> Dataset:
+        return cls(pd.concat([ds._df for ds in datasets], axis=0, **kwargs))
 
-    @classmethod
-    def load_from_id(cls, id: str) -> tuple[str, Self]:
-        assert cls.is_valid_id(id), f"Dataset {id} not found"
-        return id, cls(input_path=str(URIM_HOME / "datasets" / f"{id}.jsonl"))
-
-    @classmethod
-    def load_from_local(cls, path: Path) -> tuple[str, Self]:
-        if path.is_relative_to(URIM_HOME / "datasets"):
-            ds_id = path.relative_to(URIM_HOME / "datasets").with_suffix("").name
+    def _maybe_inplace(self, df: pd.DataFrame, *, inplace: bool) -> Dataset:
+        if inplace:
+            self._df = df
+            return self
         else:
-            assert path.exists() and path.is_file(), f"Dataset {path} not found"
-            ds_id = get_dataset_local_id(path)
-            dest_dir = URIM_HOME / "datasets"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest_dir / f"{ds_id}.jsonl")
+            return Dataset(df)
 
-        return cls.load_from_id(ds_id)
+    async def _resolve_questions(
+        self,
+        model: str,
+        questions: list[Question],
+        max_workers: int,
+    ) -> list[tuple[Any, dict]]:
+        from tqdm.auto import tqdm
 
-    @classmethod
-    def load_from_hf(cls, name: str, subset: str | None = None, **kwargs: Any) -> tuple[str, Self]:
-        ds_id = get_hf_dataset_local_id(name=name, subset=subset, **kwargs)
-        if not cls.is_valid_id(ds_id):
-            ds = cast(HFDataset, load_dataset(name, subset, **kwargs))
-            ds.to_json(URIM_HOME / "datasets" / f"{ds_id}.jsonl", orient="records", lines=True)
+        from urim.ai.question import Question
 
-        assert cls.is_valid_id(ds_id)
-        return cls.load_from_id(ds_id)
+        semaphore = asyncio.Semaphore(max_workers)
+        num_questions = len(questions)
+        results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
 
-    @classmethod
-    def load(
-        cls,
-        name: str,
-        *,
-        data_dir: str | None = None,
-        cache_dir: str | None = None,
-        token: str | None = None,
-        split: str = "train",
-        num_proc: int | None = None,
-        subset: str | None = None,
-        **kwargs: Any,
-    ) -> tuple[str, Self]:
-        path = Path(name)
-        if cls.is_valid_id(name):
-            return cls.load_from_id(name)
-        elif path.exists() and path.is_file():
-            return cls.load_from_local(path)
-        else:
-            return cls.load_from_hf(
-                name,
-                subset=subset,
-                data_dir=data_dir,
-                cache_dir=cache_dir,
-                token=token,
-                split=split,
-                num_proc=num_proc,
-                **kwargs,
-            )
+        async def _run_question(idx: int, question: Question) -> None:
+            async with semaphore:
+                try:
+                    results[idx] = await question.resolve(model, flush_cache=False)
+                except Exception as exc:
+                    results[idx] = ("", {"error": str(exc)})
 
-    def _execute_describe_fn(self, serialized_fn: str) -> Self:
-        parts = serialized_fn.split("|")
-        assert len(parts) > 0, f"Invalid function call: {serialized_fn}"
+        tasks = [
+            asyncio.create_task(_run_question(idx, question))
+            for idx, question in enumerate(questions)
+        ]
 
-        fn_name = parts[0].strip()
-        kwargs: dict[str, Any] = {}
-        for part in parts[1:]:
-            kwargs_parts = part.split("=")
-            key, value = kwargs_parts[0].strip(), kwargs_parts[1].strip()
-            if fn_name == "sample" and key == "n":
-                kwargs["n"] = int(value)
-            elif fn_name == "sample" and key == "frac":
-                kwargs["frac"] = float(value)
-            else:
-                kwargs[key] = value
+        for task in tqdm(
+            asyncio.as_completed(tasks),
+            total=num_questions,
+            leave=False,
+            desc=f"{model} - resolving questions",
+        ):
+            await task
 
-        if fn_name == "sample":
-            self.sample(**kwargs)
-        elif fn_name == "rename":
-            self.rename(**kwargs)
-        elif fn_name == "drop":
-            self.drop(**kwargs)
-        elif fn_name == "filter":
-            self.filter(**kwargs)
-        elif fn_name == "apply":
-            self.apply(**kwargs)
+        await Question.flush_cache(model)
 
-        return self
+        return results
+
+    async def _resolve_judge_questions(
+        self,
+        model: str,
+        judge_questions: dict[str, list[Question]],
+        max_workers: int,
+    ) -> dict[str, list[tuple[Any, dict]]]:
+        from tqdm.auto import tqdm
+
+        from urim.ai.question import Question
+
+        semaphore = asyncio.Semaphore(max_workers)
+        num_judge_questions = sum(len(questions) for questions in judge_questions.values())
+        judge_results: dict[str, list[tuple[Any, dict]]] = {
+            k: [("", {}) for _ in range(len(questions))] for k, questions in judge_questions.items()
+        }
+
+        async def _run_judge(label: str, idx: int, question: Question) -> None:
+            async with semaphore:
+                try:
+                    judge_results[label][idx] = await question.resolve(
+                        model,
+                        flush_cache=False,
+                    )
+                except Exception as exc:
+                    judge_results[label][idx] = ("", {"error": str(exc)})
+
+        judge_tasks = [
+            asyncio.create_task(_run_judge(label, idx, question))
+            for label, questions in judge_questions.items()
+            for idx, question in enumerate(questions)
+        ]
+
+        for task in tqdm(
+            asyncio.as_completed(judge_tasks),
+            total=num_judge_questions,
+            leave=False,
+            desc=f"{model} - resolving judge questions",
+        ):
+            await task
+
+        await Question.flush_cache(model)
+
+        return judge_results
+
+
+def _normalize_cell(value: Any) -> Hashable | None:
+    import datetime as dt
+    import math
+
+    if isinstance(value, np.generic):
+        value = value.item()
+
+    if value is None:
+        return None
+
+    if value is pd.NA:
+        return None
+
+    if isinstance(value, np.bool_ | bool):
+        return bool(value)
+
+    if isinstance(value, np.integer | int) and not isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, Real) and not isinstance(value, bool):
+        float_value = float(value)
+        if math.isnan(float_value):
+            return None
+        return float_value
+
+    if isinstance(value, str | bytes):
+        return value
+
+    if isinstance(value, dt.datetime | dt.date | dt.time):
+        return value.isoformat()
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    if isinstance(value, pd.Timedelta):
+        return value.isoformat()
+
+    if isinstance(value, np.datetime64 | dt.datetime):
+        return pd.Timestamp(value).isoformat()
+
+    if isinstance(value, np.timedelta64 | dt.timedelta):
+        return pd.Timedelta(value).isoformat()
+
+    if isinstance(value, pd.Series):
+        return (
+            "series",
+            tuple(_normalize_cell(v) for v in value.tolist()),
+        )
+
+    if isinstance(value, pd.DataFrame):
+        normalized_df = _normalize_dataframe(value)
+        return (
+            "dataframe",
+            tuple(tuple(row) for row in normalized_df.to_numpy().tolist()),
+        )
+
+    if isinstance(value, np.ndarray):
+        return (
+            "ndarray",
+            tuple(_normalize_cell(v) for v in value.tolist()),
+        )
+
+    if isinstance(value, Mapping):
+        items = tuple(
+            (str(k), _normalize_cell(v))
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return ("map", items)
+
+    if isinstance(value, set | frozenset):
+        normalized_members = [_normalize_cell(v) for v in value]
+        sorted_members = tuple(sorted(normalized_members, key=lambda elem: repr(elem)))
+        return ("set", sorted_members)
+
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return ("seq", tuple(_normalize_cell(v) for v in value))
+
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:  # pragma: no cover - fallback to repr
+            pass
+
+    if hasattr(value, "__dict__"):
+        attrs = tuple(
+            (str(k), _normalize_cell(v))
+            for k, v in sorted(vars(value).items(), key=lambda item: str(item[0]))
+        )
+        return ("object", attrs)
+
+    return repr(value)
+
+
+def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    normalized_cols = sorted(df.columns, key=lambda col: str(col))
+    normalized_df = df.reindex(columns=normalized_cols)
+    return normalized_df.map(_normalize_cell)

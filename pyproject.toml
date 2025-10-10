@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "urim"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI utilities for LLM research: quick dataset creation, evaluations, chat, and inference."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,22 +19,18 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: MIT License",
   "Environment :: Console",
+  "Typing :: Typed",
 ]
 # Minimal runtime deps; expand as features land
 dependencies = [
-  "typer>=0.12",
-  "rich>=13.7",
   "openai>=1.40",
   "backoff>=2.2.1",
-  "readerwriterlock>=1.0.9",
   "pandas>=2.0",
   "datasets>=2.19",
   "python-dotenv>=1.1.1",
   "orjson>=3.11.2",
+  "blake3>=1.0.7",
 ]
-
-[project.scripts]
-urim = "urim.app:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/urim"]
@@ -45,9 +41,12 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "types-requests",
+  "pytest-asyncio>=1.2.0",
+  "pytest-cov>=7.0.0",
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 addopts = "-q"
 testpaths = ["tests"]
 markers = [
