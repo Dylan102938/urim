@@ -139,7 +139,7 @@ async def test_apply_with_llm(dataset: Dataset) -> None:
 
 def test_concat_no_llm(dataset: Dataset) -> None:
     ds1 = Dataset(dataset.df().copy())
-    concat = ds1.concatenate(ds1)
+    concat = Dataset.concatenate(dataset, ds1)
 
     assert len(concat.df()) == 8
 
