@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urim.env import storage_subdir
 
 if TYPE_CHECKING:
+    from urim.ai.client import ChatResult
     from urim.store.disk_store import DiskStore
 
 EvalType = TypeVar("EvalType", bound=str | int | float | bool | list | dict)
@@ -43,18 +44,35 @@ class Question(ABC, Generic[EvalType]):
         prompt: str | None = None,
         messages: list[dict] | None = None,
         system: str | None = None,
+        enable_cot: bool = False,
+        cot_instructions: str | None = None,
+        cot_tag: str = "thinking",
         enable_cache: bool = True,
         salt: str = "",
         **kwargs: Any,
     ) -> None:
+        from urim.ai.prompts import COT_SYSTEM, COT_WITH_INSTRUCTIONS_SYSTEM
+
         assert not prompt or not messages, "Cannot specify both prompt and messages"
 
         self.prompt = prompt
         self.messages = messages
-        self.system = system
+        self.enable_cot = enable_cot
+        self.cot_tag = cot_tag
         self.enable_cache = enable_cache
         self.salt = salt
         self.kwargs = kwargs
+        self.system: str | None = None
+        if self.enable_cot and system is None:
+            self.system = (
+                COT_SYSTEM.format(tag=self.cot_tag)
+                if cot_instructions is None
+                else COT_WITH_INSTRUCTIONS_SYSTEM.format(
+                    tag=self.cot_tag, instructions=cot_instructions
+                )
+            )
+        else:
+            self.system = system
 
     def __str__(self) -> str:
         wrapper = "{class_name}({insides})"
@@ -100,6 +118,36 @@ class Question(ABC, Generic[EvalType]):
 
         return result
 
+    def parse_cot(self, completion: ChatResult) -> tuple[ChatResult, dict[str, Any]]:
+        from urim.ai.client import ChatResult
+
+        if completion.content is None:
+            return completion, {}
+
+        close_tag = f"</{self.cot_tag}>"
+        close_idx = completion.content.find(close_tag)
+        if close_idx == -1:
+            return completion, {}
+
+        close_tag_end = close_idx + len(close_tag)
+        cot_text = completion.content[:close_tag_end]
+
+        cleaned_content = completion.content[close_tag_end:].strip()
+        filtered_tokens = completion.top_tokens
+        if completion.top_tokens:
+            filtered_tokens = []
+            can_strip = True
+            cursor = 0
+            for token_info in completion.top_tokens:
+                token = token_info.token
+                cursor += len(token)
+                if cursor > close_tag_end and not (token.isspace() and can_strip):
+                    can_strip = False
+                    filtered_tokens.append(token_info)
+
+        result = ChatResult(content=cleaned_content, top_tokens=filtered_tokens, raw=completion.raw)
+        return result, {"cot": cot_text.strip()}
+
     def resolve_sync(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
         return asyncio.run(self.resolve(model, flush_cache=flush_cache))
 
@@ -136,7 +184,11 @@ class FreeForm(Question[str]):
 
         messages = self.resolve_to_messages()
         completion = await LLM().chat_completion(model, messages=messages, **self.kwargs)
-        return (completion.content or "", {})
+        extra: dict[str, Any] = {}
+        if self.enable_cot:
+            completion, extra = self.parse_cot(completion)
+
+        return (completion.content or "", extra)
 
     def resolve_to_messages(self) -> list[dict]:
         if self.messages is None:
@@ -156,6 +208,9 @@ class ExtractJSON(FreeForm):
         prompt: str | None = None,
         messages: list[dict] | None = None,
         system: str | None = None,
+        enable_cot: bool = False,
+        cot_instructions: str | None = None,
+        cot_tag: str = "thinking",
         enable_cache: bool = True,
         use_json_system: bool = True,
         **kwargs: Any,
@@ -163,7 +218,16 @@ class ExtractJSON(FreeForm):
         from urim.ai.prompts import OUTPUT_JSON_SYSTEM
 
         resolved_system = OUTPUT_JSON_SYSTEM if use_json_system else system
-        super().__init__(prompt, messages, resolved_system, enable_cache, **kwargs)
+        super().__init__(
+            prompt,
+            messages,
+            resolved_system,
+            enable_cot,
+            cot_instructions,
+            cot_tag,
+            enable_cache,
+            **kwargs,
+        )
 
     async def json(self, model: str) -> dict:
         import json
@@ -184,6 +248,9 @@ class ExtractFunction(FreeForm):
         prompt: str | None = None,
         messages: list[dict] | None = None,
         system: str | None = None,
+        enable_cot: bool = False,
+        cot_instructions: str | None = None,
+        cot_tag: str = "thinking",
         enable_cache: bool = True,
         use_function_system: bool = True,
         **kwargs: Any,
@@ -191,7 +258,16 @@ class ExtractFunction(FreeForm):
         from urim.ai.prompts import OUTPUT_FUNCTION_SYSTEM
 
         resolved_system = OUTPUT_FUNCTION_SYSTEM if use_function_system else system
-        super().__init__(prompt, messages, resolved_system, enable_cache, **kwargs)
+        super().__init__(
+            prompt,
+            messages,
+            resolved_system,
+            enable_cot,
+            cot_instructions,
+            cot_tag,
+            enable_cache,
+            **kwargs,
+        )
 
     async def fn(self, model: str) -> Callable[..., Any]:
         import ast
@@ -240,25 +316,30 @@ class Rating(Question[float]):
     async def fetch(self, model: str) -> QuestionResult[float]:
         from urim.ai.client import LLM
 
+        kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
+        if self.enable_cot:
+            kwargs.update({"max_tokens": 1, "temperature": 0.0})
+
         completion = await LLM().chat_completion(
             model,
             messages=self.messages,
             prompt=self.prompt,
-            **self.kwargs,
-            max_tokens=1,
-            temperature=0.0,
-            logprobs=True,
-            convert_to_probs=True,
+            **{**kwargs, **self.kwargs},
         )
 
-        assert completion.top_tokens is not None, (
+        extra: dict[str, Any] = {}
+        if self.enable_cot:
+            completion, extra = self.parse_cot(completion)
+
+        assert completion.top_tokens and completion.top_tokens[0].top_scores is not None, (
             "Looks like your provider doesn't support logprobs"
         )
 
-        score = self._agg_score(completion.top_tokens)
+        scores = completion.top_tokens[0].top_scores or {}
+        score = self._agg_score(scores)
         assert score is not None, "No valid score found"
 
-        return (score, {"raw": completion.top_tokens})
+        return (score, {"raw": scores, **extra})
 
     def _agg_score(self, scores: dict[str, float]) -> float | None:
         total = 0.0
@@ -295,15 +376,20 @@ class NextToken(Question):
     async def fetch(self, model: str) -> QuestionResult[str]:
         from urim.ai.client import LLM
 
+        kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
+        if self.enable_cot:
+            kwargs.update({"max_tokens": 1, "temperature": 0.0})
+
         completion = await LLM().chat_completion(
             model,
             messages=self.messages,
             prompt=self.prompt,
-            **self.kwargs,
-            max_tokens=1,
-            temperature=0.0,
-            logprobs=True,
-            convert_to_probs=True,
+            **{**kwargs, **self.kwargs},
         )
 
-        return completion.content or "", {"probs": completion.top_tokens or {}}
+        extra: dict[str, Any] = {}
+        if self.enable_cot:
+            completion, extra = self.parse_cot(completion)
+
+        top = completion.top_tokens[0].top_scores if completion.top_tokens else None
+        return completion.content or "", {"probs": top or {}, **extra}

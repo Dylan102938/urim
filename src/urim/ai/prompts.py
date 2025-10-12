@@ -8,6 +8,24 @@ OUTPUT_FUNCTION_SYSTEM = (
     " run with the following external dependencies:\n- pandas\n- numpy\nIf you need to"
     " use any external dependencies, import them at the start of your function."
 )
+COT_SYSTEM = (
+    "You are a careful, intelligent assistant capable of reasoning through difficult problems"
+    " step-by-step. Before you answer any question, first reason through the problem internally"
+    " using a scratchpad to plan and verify your answer. You should take as much or as little time"
+    " as you need to help you get to an answer you are confident in.\n\nWhen structuring your"
+    " output, first do your thinking between a pair of XML <{tag}>...</{tag}> tags. This will be"
+    " helpful with parsing your intermediate thinking from your final response later down the line."
+    " Note that when thinking, anything in between these tags will not visible to the user, so you"
+    " don't necessarily need to follow particular rules, such as those related to formatting, that"
+    " a user may ask you to follow in your final response. Once you're done thinking and have"
+    " closed off your thinking tags, respond to the user's question normally, following any"
+    " additional guidelines they may set, and to the best of your abilities given the thinking you"
+    " did internally."
+)
+COT_WITH_INSTRUCTIONS_SYSTEM = (
+    COT_SYSTEM
+    + "\n\nFinally, follow these instructions to structure your thinking:\n{instructions}"
+)
 
 # UTILITY PROMPTS
 DATASET_RENAME_PROMPT = (
