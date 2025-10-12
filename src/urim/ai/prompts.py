@@ -70,6 +70,26 @@ DATASET_APPLY_PROMPT = (
     " writing your function, don't use any type hints, if you need to import any"
     " external libraries, do so at the beginning of your response."
 )
+DATASET_REDUCE_PROMPT = (
+    "I have a dataset with the following columns: {columns}. Here is also the head output from that"
+    " dataset:\n{head}\n\nI want to reduce by some column(s) and aggregate the remaining columns. I"
+    " will do this by first calling `pd.DataFrame.groupby` followed by `pd.DataFrame.agg`. Please"
+    " output a JSON with two keys, `groupby` and `agg`, that will each contain a dictionary of"
+    " kwargs to pass into each of those functions such that the reduction makes the most sense."
+    " Finally, to give you some more information that may be helpful in understanding the desired"
+    " reduction strategy, here are the number of unique values for each column in the"
+    " dataset:\n{unique_summary}"
+)
+DATASET_REDUCE_WITH_HINT_PROMPT = (
+    "I have a dataset with the following columns: {columns}. Here is also the head output from that"
+    " dataset:\n{head}\n\nI want to reduce by some column(s) and aggregate the remaining columns. I"
+    " will do this by first calling `pd.DataFrame.groupby` followed by `pd.DataFrame.agg`. Please"
+    " output a JSON with two keys, `groupby` and `agg`, that will each contain a dictionary of"
+    " kwargs to pass into each of those functions such that the reduction makes the most sense."
+    " Here's a description of the desired reduction strategy:\n{scheme}\n\nFinally, to give you"
+    " some more information that may be helpful in creating your reduction strategy, here are the"
+    " number of unique values for each column in the dataset:\n{unique_summary}"
+)
 DATASET_MERGE_NO_HINT_PROMPT = (
     "I have a dataset with the following columns: {columns}. I want to join this"
     " dataset with another one with the following columns: {other_columns}. Here is the"

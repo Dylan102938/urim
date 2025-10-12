@@ -5,7 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from numbers import Real
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -279,6 +279,44 @@ class Dataset:
         df = self._df.copy()
         df[column] = df.apply(fn, axis=1, **kwargs)
 
+        return self._maybe_inplace(df, inplace=inplace)
+
+    async def reduce(
+        self,
+        by: str | list[str] | None = None,
+        agg: dict[str, Literal["mean", "min", "max", "sum", "count"]] | None = None,
+        hint: str | None = None,
+        model: str = PRESET_BALANCED,
+        *,
+        inplace: bool = False,
+        question_kwargs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dataset:
+        import json
+
+        from urim.ai.prompts import DATASET_REDUCE_PROMPT, DATASET_REDUCE_WITH_HINT_PROMPT
+
+        if by is None or agg is None:
+            counts_series = self._df.nunique(dropna=False)
+            counts_dict = {str(column): int(count) for column, count in counts_series.items()}
+            add_kwargs = await extract_op_kwargs(
+                DATASET_REDUCE_WITH_HINT_PROMPT if hint else DATASET_REDUCE_PROMPT,
+                scheme=hint,
+                model=model,
+                columns=", ".join(self._df.columns),
+                unique_summary=json.dumps(counts_dict, indent=2),
+                column_categories=counts_dict,
+                curr_df=self._df,
+                question_kwargs=question_kwargs,
+            )
+
+            assert "groupby" in add_kwargs and "agg" in add_kwargs
+
+            df = self._df.groupby(**add_kwargs["groupby"], **kwargs).agg(add_kwargs["agg"])
+        else:
+            df = self._df.groupby(by, **kwargs).agg(agg)
+
+        df = df.reset_index()
         return self._maybe_inplace(df, inplace=inplace)
 
     async def generate(

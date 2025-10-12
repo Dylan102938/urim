@@ -137,6 +137,50 @@ async def test_apply_with_llm(dataset: Dataset) -> None:
     assert list(ds.df()["sum"]) == [110, 220, 330, 440]
 
 
+async def test_reduce_no_llm() -> None:
+    ds = Dataset(
+        pd.DataFrame(
+            {
+                "group": ["x", "x", "y", "y"],
+                "foo": [1, 2, 3, 4],
+                "bar": [5, 6, 7, 8],
+            }
+        )
+    )
+
+    reduced = await ds.reduce(by="group", agg={"foo": "sum", "bar": "max"})
+    reduced_df = reduced.df().sort_values("group").reset_index(drop=True)
+
+    assert reduced is not ds
+    assert len(ds.df()) == 4
+    assert list(reduced_df["group"]) == ["x", "y"]
+    assert list(reduced_df["foo"]) == [3, 7]
+    assert list(reduced_df["bar"]) == [6, 8]
+
+
+@requires_llm
+async def test_reduce_with_llm() -> None:
+    ds = Dataset(
+        pd.DataFrame(
+            {
+                "group": ["x", "x", "y", "y"],
+                "foo": [1, 2, 3, 4],
+                "bar": [5, 6, 7, 8],
+            }
+        )
+    )
+
+    reduced = await ds.reduce(
+        hint="Group the rows by the group column, summing foo and taking the max of bar.",
+        question_kwargs={"enable_cache": False},
+    )
+    reduced_df = reduced.df().sort_values("group").reset_index(drop=True)
+
+    assert list(reduced_df["group"]) == ["x", "y"]
+    assert list(reduced_df["foo"]) == [3, 7]
+    assert list(reduced_df["bar"]) == [6, 8]
+
+
 def test_concat_no_llm(dataset: Dataset) -> None:
     ds1 = Dataset(dataset.df().copy())
     concat = Dataset.concatenate(dataset, ds1)
