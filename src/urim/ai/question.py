@@ -165,6 +165,17 @@ class Question(ABC, Generic[EvalType]):
 
         _caches[model].remove(self.hash())
 
+    def resolve_to_messages(self) -> list[dict]:
+        if self.messages is None:
+            assert self.prompt is not None, "Must provide either messages or prompt"
+            messages = [{"role": "user", "content": self.prompt}]
+            if self.system is not None:
+                messages.insert(0, {"role": "system", "content": self.system})
+
+            return messages
+
+        return self.messages
+
     @classmethod
     async def flush_cache(cls, model: str) -> None:
         if model not in _caches:
@@ -189,17 +200,6 @@ class FreeForm(Question[str]):
             completion, extra = self.parse_cot(completion)
 
         return (completion.content or "", extra)
-
-    def resolve_to_messages(self) -> list[dict]:
-        if self.messages is None:
-            assert self.prompt is not None, "Must provide either messages or prompt"
-            messages = [{"role": "user", "content": self.prompt}]
-            if self.system is not None:
-                messages.insert(0, {"role": "system", "content": self.system})
-
-            return messages
-
-        return self.messages
 
 
 class ExtractJSON(FreeForm):
@@ -317,13 +317,13 @@ class Rating(Question[float]):
         from urim.ai.client import LLM
 
         kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
-        if self.enable_cot:
+        if not self.enable_cot:
             kwargs.update({"max_tokens": 1, "temperature": 0.0})
 
+        messages = self.resolve_to_messages()
         completion = await LLM().chat_completion(
             model,
-            messages=self.messages,
-            prompt=self.prompt,
+            messages=messages,
             **{**kwargs, **self.kwargs},
         )
 
@@ -377,13 +377,13 @@ class NextToken(Question):
         from urim.ai.client import LLM
 
         kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
-        if self.enable_cot:
+        if not self.enable_cot:
             kwargs.update({"max_tokens": 1, "temperature": 0.0})
 
+        messages = self.resolve_to_messages()
         completion = await LLM().chat_completion(
             model,
-            messages=self.messages,
-            prompt=self.prompt,
+            messages=messages,
             **{**kwargs, **self.kwargs},
         )
 
