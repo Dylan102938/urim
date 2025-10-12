@@ -130,23 +130,25 @@ class Question(ABC, Generic[EvalType]):
             return completion, {}
 
         close_tag_end = close_idx + len(close_tag)
-        cot_text = completion.content[:close_tag_end]
+        content = completion.content
+        while close_tag_end < len(content) and content[close_tag_end].isspace():
+            close_tag_end += 1
 
-        cleaned_content = completion.content[close_tag_end:].strip()
+        cot_text = content[:close_tag_end].strip()
+        cleaned_content = content[close_tag_end:].strip()
+
         filtered_tokens = completion.top_tokens
         if completion.top_tokens:
             filtered_tokens = []
-            can_strip = True
             cursor = 0
             for token_info in completion.top_tokens:
                 token = token_info.token
                 cursor += len(token)
-                if cursor > close_tag_end and not (token.isspace() and can_strip):
-                    can_strip = False
+                if cursor > close_tag_end:
                     filtered_tokens.append(token_info)
 
         result = ChatResult(content=cleaned_content, top_tokens=filtered_tokens, raw=completion.raw)
-        return result, {"cot": cot_text.strip()}
+        return result, {"cot": cot_text}
 
     def resolve_sync(self, model: str, *, flush_cache: bool = True) -> QuestionResult[EvalType]:
         return asyncio.run(self.resolve(model, flush_cache=flush_cache))
@@ -331,9 +333,9 @@ class Rating(Question[float]):
         if self.enable_cot:
             completion, extra = self.parse_cot(completion)
 
-        assert completion.top_tokens and completion.top_tokens[0].top_scores is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens and completion.top_tokens[0].top_scores is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         scores = completion.top_tokens[0].top_scores or {}
         score = self._agg_score(scores)
