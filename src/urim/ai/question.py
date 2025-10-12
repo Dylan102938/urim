@@ -141,7 +141,7 @@ class Question(ABC, Generic[EvalType]):
             for token_info in completion.top_tokens:
                 token = token_info.token
                 cursor += len(token)
-                if cursor > close_tag_end and not token.isspace() and can_strip:
+                if cursor > close_tag_end and not (token.isspace() and can_strip):
                     can_strip = False
                     filtered_tokens.append(token_info)
 
@@ -331,9 +331,9 @@ class Rating(Question[float]):
         if self.enable_cot:
             completion, extra = self.parse_cot(completion)
 
-        assert completion.top_tokens and completion.top_tokens[0].top_scores is not None, (
-            "Looks like your provider doesn't support logprobs"
-        )
+        assert (
+            completion.top_tokens and completion.top_tokens[0].top_scores is not None
+        ), "Looks like your provider doesn't support logprobs"
 
         scores = completion.top_tokens[0].top_scores or {}
         score = self._agg_score(scores)
