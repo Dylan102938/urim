@@ -413,7 +413,7 @@ class Dataset:
 
         ### Resolve judge questions and add to dataframe ###
 
-        judge_results = await self._resolve_judge_questions(model, judge_questions)
+        judge_results = await self._resolve_judge_questions(judge_questions)
         for k, results in judge_results.items():
             df[k] = [result[0] for result in results]
             extra_columns = defaultdict(list)
@@ -453,7 +453,8 @@ class Dataset:
         async def _run_question(idx: int, question: Question) -> None:
             async with GENERATION_SEMAPHORE:
                 try:
-                    results[idx] = await question.resolve(model, flush_cache=False)
+                    should_flush_cache = idx % 100 == 0
+                    results[idx] = await question.resolve(model, flush_cache=should_flush_cache)
                 except Exception as exc:
                     results[idx] = ("", {"error": str(exc)})
 
@@ -475,9 +476,7 @@ class Dataset:
         return results
 
     async def _resolve_judge_questions(
-        self,
-        model: str,
-        judge_questions: dict[str, list[Question]],
+        self, judge_questions: dict[str, list[Question]]
     ) -> dict[str, list[tuple[Any, dict]]]:
         from tqdm.auto import tqdm
 
@@ -491,9 +490,10 @@ class Dataset:
         async def _run_judge(label: str, idx: int, question: Question) -> None:
             async with GENERATION_SEMAPHORE:
                 try:
+                    should_flush_cache = idx % 100 == 0
                     judge_results[label][idx] = await question.resolve(
-                        model,
-                        flush_cache=False,
+                        PRESET_BALANCED,
+                        flush_cache=should_flush_cache,
                     )
                 except Exception as exc:
                     judge_results[label][idx] = ("", {"error": str(exc)})
@@ -508,11 +508,11 @@ class Dataset:
             asyncio.as_completed(judge_tasks),
             total=num_judge_questions,
             leave=False,
-            desc=f"{model} - resolving judge questions",
+            desc=f"{PRESET_BALANCED} - resolving judge questions",
         ):
             await task
 
-        await Question.flush_cache(model)
+        await Question.flush_cache(PRESET_BALANCED)
 
         return judge_results
 
