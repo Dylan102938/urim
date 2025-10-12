@@ -19,6 +19,8 @@ PRESET_FAST = "gpt-4.1-mini"
 PRESET_BALANCED = "gpt-4.1"
 PRESET_THOROUGH = "gpt-5"
 
+GENERATION_SEMAPHORE = asyncio.Semaphore(100)
+
 
 async def extract_op_kwargs(
     template: str,
@@ -290,7 +292,6 @@ class Dataset:
         model: str = PRESET_BALANCED,
         *,
         judges: dict[str, QuestionFactory] | None = None,
-        max_workers: int = 100,
         inplace: bool = False,
         **question_kwargs: Any,
     ) -> Dataset:
@@ -339,7 +340,7 @@ class Dataset:
 
         ### Resolve questions and add to dataframe ###
 
-        results = await self._resolve_questions(model, questions, max_workers)
+        results = await self._resolve_questions(model, questions)
         df = self._df.copy()
         df[out_col] = [result[0] for result in results]
 
@@ -367,7 +368,7 @@ class Dataset:
 
         ### Resolve judge questions and add to dataframe ###
 
-        judge_results = await self._resolve_judge_questions(model, judge_questions, max_workers)
+        judge_results = await self._resolve_judge_questions(model, judge_questions)
         for k, results in judge_results.items():
             df[k] = [result[0] for result in results]
             extra_columns = defaultdict(list)
@@ -396,18 +397,16 @@ class Dataset:
         self,
         model: str,
         questions: list[Question],
-        max_workers: int,
     ) -> list[tuple[Any, dict]]:
         from tqdm.auto import tqdm
 
         from urim.ai.question import Question
 
-        semaphore = asyncio.Semaphore(max_workers)
         num_questions = len(questions)
         results: list[tuple[Any, dict]] = [("", {}) for _ in range(num_questions)]
 
         async def _run_question(idx: int, question: Question) -> None:
-            async with semaphore:
+            async with GENERATION_SEMAPHORE:
                 try:
                     results[idx] = await question.resolve(model, flush_cache=False)
                 except Exception as exc:
@@ -434,20 +433,18 @@ class Dataset:
         self,
         model: str,
         judge_questions: dict[str, list[Question]],
-        max_workers: int,
     ) -> dict[str, list[tuple[Any, dict]]]:
         from tqdm.auto import tqdm
 
         from urim.ai.question import Question
 
-        semaphore = asyncio.Semaphore(max_workers)
         num_judge_questions = sum(len(questions) for questions in judge_questions.values())
         judge_results: dict[str, list[tuple[Any, dict]]] = {
             k: [("", {}) for _ in range(len(questions))] for k, questions in judge_questions.items()
         }
 
         async def _run_judge(label: str, idx: int, question: Question) -> None:
-            async with semaphore:
+            async with GENERATION_SEMAPHORE:
                 try:
                     judge_results[label][idx] = await question.resolve(
                         model,
