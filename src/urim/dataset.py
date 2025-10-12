@@ -297,8 +297,15 @@ class Dataset:
         from urim.ai.prompts import DATASET_REDUCE_PROMPT, DATASET_REDUCE_WITH_HINT_PROMPT
 
         if by is None or agg is None:
-            counts_series = self._df.nunique(dropna=False)
-            counts_dict = {str(column): int(count) for column, count in counts_series.items()}
+            counts_dict: dict[str, int | str] = {}
+            for column in self._df.columns:
+                series = self._df[column]
+                column_key = str(column)
+                if isinstance(series.iloc[0], Hashable):
+                    counts_dict[column_key] = int(series.nunique(dropna=False))
+                else:
+                    counts_dict[column_key] = "Unknown count"
+
             add_kwargs = await extract_op_kwargs(
                 DATASET_REDUCE_WITH_HINT_PROMPT if hint else DATASET_REDUCE_PROMPT,
                 scheme=hint,
