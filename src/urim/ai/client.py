@@ -21,7 +21,14 @@ logger = get_logger("ai.client")
 class ChatResult:
     content: str | None
     raw: dict[str, Any]
-    top_tokens: dict | None = None
+    top_tokens: list[TopTokens] | None = None
+
+
+@dataclass(frozen=True)
+class TopTokens:
+    token: str
+    value: float | None
+    top_scores: dict[str, float] | None = None
 
 
 class LLM:
@@ -150,19 +157,33 @@ class LLM:
             resp.choices[0].message.content if resp.choices else None,
         )
 
-        logprobs_dict: dict[str, float] | None = None
-        if resp.choices[0].logprobs is not None:
-            logprobs = resp.choices[0].logprobs.content[0].top_logprobs  # type: ignore
-            logprobs_dict = {}
-            for el in logprobs:
-                logprobs_dict[el.token] = (
-                    el.logprob if not convert_to_probs else math.exp(el.logprob)
+        top_tokens: list[TopTokens] | None = None
+        if (
+            resp.choices
+            and resp.choices[0].logprobs is not None
+            and resp.choices[0].logprobs.content is not None
+        ):
+            top_tokens = []
+            for token_info in resp.choices[0].logprobs.content:
+                top_scores_dict: dict[str, float] | None = None
+                if token_info.top_logprobs:
+                    top_scores_dict = {
+                        top.token: top.logprob if not convert_to_probs else math.exp(top.logprob)
+                        for top in token_info.top_logprobs
+                    }
+
+                top_tokens.append(
+                    TopTokens(
+                        token=token_info.token,
+                        value=token_info.logprob,
+                        top_scores=top_scores_dict,
+                    )
                 )
 
         return ChatResult(
             raw=resp.model_dump(),
             content=resp.choices[0].message.content,
-            top_tokens=logprobs_dict,
+            top_tokens=top_tokens,
         )
 
 
