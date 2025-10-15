@@ -301,10 +301,11 @@ class Dataset:
             for column in self._df.columns:
                 series = self._df[column]
                 column_key = str(column)
-                if isinstance(series.iloc[0], Hashable):
-                    counts_dict[column_key] = int(series.nunique(dropna=False))
-                else:
-                    counts_dict[column_key] = "Unknown count"
+                counts_dict[column_key] = (
+                    int(series.nunique(dropna=False))
+                    if isinstance(series.iloc[0], Hashable)
+                    else "Unknown count (not categorical)"
+                )
 
             add_kwargs = await extract_op_kwargs(
                 DATASET_REDUCE_WITH_HINT_PROMPT if hint else DATASET_REDUCE_PROMPT,

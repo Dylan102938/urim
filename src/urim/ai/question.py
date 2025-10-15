@@ -127,7 +127,7 @@ class Question(ABC, Generic[EvalType]):
         close_tag = f"</{self.cot_tag}>"
         close_idx = completion.content.find(close_tag)
         if close_idx == -1:
-            return completion, {}
+            return completion, {"cot": ""}
 
         close_tag_end = close_idx + len(close_tag)
         content = completion.content
