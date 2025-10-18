@@ -86,16 +86,12 @@ ds = Dataset(df)
 
 # Generate free-form answers
 ds_answered = await ds.generate(
-    question_col="question",
-    out_col="answer",
     model="gpt-4o",
     enable_cot=True  # Enable chain-of-thought reasoning
 )
 
-# Add evaluation scores
+# Generate with different question type
 ds_evaluated = await ds_answered.generate(
-    question_col="question",
-    out_col="quality_score",
     question_type=Rating,
     model="gpt-4o-mini",
     min_rating=1,
@@ -109,14 +105,13 @@ ds_evaluated = await ds_answered.generate(
 from urim import LLM
 from urim.ai.question import FreeForm, ExtractJSON, ExtractFunction
 
-# Simple completion
-llm = LLM()
-result = await llm.chat_completion(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello!"}]
+# Create a question
+question = FreeForm(
+    prompt="What is the best way to make apple pie?"
 )
+answer, extra = await question.resolve("gpt-4o")
 
-# Using Question abstractions for structured outputs
+# Extract structured outputs
 question = ExtractJSON(
     prompt="List 3 interesting facts about Paris as a JSON array",
     enable_cot=True
