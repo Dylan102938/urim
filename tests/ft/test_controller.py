@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -58,8 +58,8 @@ class StubFineTuneService(FineTuneService):
 
         job = OpenAIFineTuneJob(
             id=f"stub-job-{len(self.jobs)}",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             status=FineTuneJobStatus.RUNNING,
             service_identifier=self.api_key,
             raw=None,
