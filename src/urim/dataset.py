@@ -360,14 +360,14 @@ class Dataset:
         input_iter = self._df[input_col].to_list()
         questions: list[Question] = []
         question_type = question_type or FreeForm
+        common_system = question_kwargs.pop("system", None)
+        common_salt = question_kwargs.pop("salt", None)
         for i, inp in enumerate(input_iter):
-            common_system = question_kwargs.pop("system", None)
             system = (
                 str(self._df.iloc[i][system_col])
                 if system_col in self._df.columns
                 else common_system
             )
-            common_salt = question_kwargs.pop("salt", None)
             salt = str(self._df.iloc[i][salt_col]) if salt_col in self._df.columns else common_salt
             question_input: dict[str, Any]
             if input_col == messages_col:
