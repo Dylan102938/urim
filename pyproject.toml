@@ -7,14 +7,13 @@ name = "urim"
 version = "0.2.0"
 description = "CLI utilities for LLM research: quick dataset creation, evaluations, chat, and inference."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "urim contributors" }]
 license = { text = "MIT" }
 keywords = ["llm", "nlp", "cli", "research", "evaluation", "dataset"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: MIT License",
