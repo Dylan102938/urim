@@ -65,7 +65,8 @@ class DiskStore(Generic[K, V], Store[K, V]):
             if overflow <= 0:
                 return
 
-            to_drop = self._page.iloc[:overflow].index
+            drop_n = max(overflow, self.page_size // 2)
+            to_drop = self._page.iloc[:drop_n].index
             self._page.drop(index=to_drop, inplace=True)
 
     def remove(self, key: K) -> None:
