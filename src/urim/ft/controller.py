@@ -5,7 +5,7 @@ from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from typing_extensions import Self
+from typing_extensions import Self  # noqa: UP035
 
 from urim.ft.openai import OpenAIFineTuneJob, OpenAIFineTuneService
 from urim.logging import get_logger
