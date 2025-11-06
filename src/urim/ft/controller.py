@@ -417,28 +417,33 @@ class FineTuneController:
                 self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
 
-                dataset_hash = hash(request.train_ds)
-                ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
-                if ds_path.exists():
-                    shared_inflight = any(
-                        hash(other_request.train_ds) == dataset_hash
-                        for other_request in self._inflight
-                        if other_request not in stale
-                    )
-                    if shared_inflight:
-                        logger.debug(
-                            "Keeping cached dataset for request %s; inflight job still uses"
-                            " hash %s.",
-                            request,
-                            dataset_hash,
+                for ds in [request.train_ds, request.validation_ds]:
+                    if ds is None:
+                        continue
+
+                    dataset_hash = hash(request.train_ds)
+                    ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
+                    if ds_path.exists():
+                        shared_inflight = any(
+                            hash(other_request.train_ds) == dataset_hash
+                            or hash(other_request.validation_ds) == dataset_hash
+                            for other_request in self._inflight
+                            if other_request not in stale
                         )
-                    else:
-                        ds_path.unlink()
-                        logger.debug(
-                            "Removed cached dataset for request %s at %s.",
-                            request,
-                            ds_path,
-                        )
+                        if shared_inflight:
+                            logger.debug(
+                                "Keeping cached dataset for request %s; inflight job still uses"
+                                " hash %s.",
+                                request,
+                                dataset_hash,
+                            )
+                        else:
+                            ds_path.unlink()
+                            logger.debug(
+                                "Removed cached dataset for request %s at %s.",
+                                request,
+                                ds_path,
+                            )
 
                 logger.debug(
                     "Cleaned up completed request %s and removed it from persistence.",
