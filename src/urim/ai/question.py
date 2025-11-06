@@ -333,9 +333,9 @@ class Rating(Question[float]):
         if self.enable_cot:
             completion, extra = self.parse_cot(completion)
 
-        assert (
-            completion.top_tokens and completion.top_tokens[0].top_scores is not None
-        ), "Looks like your provider doesn't support logprobs"
+        assert completion.top_tokens and completion.top_tokens[0].top_scores is not None, (
+            "Looks like your provider doesn't support logprobs"
+        )
 
         scores = completion.top_tokens[0].top_scores or {}
         score = self._agg_score(scores)
