@@ -421,7 +421,7 @@ class FineTuneController:
                     if ds is None:
                         continue
 
-                    dataset_hash = hash(request.train_ds)
+                    dataset_hash = hash(ds)
                     ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
                     if ds_path.exists():
                         shared_inflight = any(
