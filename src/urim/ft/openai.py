@@ -62,6 +62,7 @@ class OpenAIFineTuneService(FineTuneService):
         learning_rate: float = 1.0,
         batch_size: int = 4,
         n_epochs: int = 1,
+        validation_ds: Dataset | None = None,
         **kwargs: Any,
     ) -> OpenAIFineTuneJob:
         logger.debug(
@@ -71,7 +72,12 @@ class OpenAIFineTuneService(FineTuneService):
             batch_size,
             n_epochs,
         )
-        training_file_id = await self._upload_training_file(train_ds)
+        training_file_id = await self._upload_dataset(train_ds)
+        validation_file_id = (
+            await self._upload_dataset(validation_ds, name="validation.jsonl")
+            if validation_ds
+            else None
+        )
         job = await self._client.fine_tuning.jobs.create(
             model=model,
             training_file=training_file_id,
@@ -80,6 +86,7 @@ class OpenAIFineTuneService(FineTuneService):
                 "learning_rate_multiplier": learning_rate,
                 "n_epochs": n_epochs,
             },
+            validation_file=validation_file_id,
             **kwargs,
         )
         logger.debug(
@@ -112,7 +119,7 @@ class OpenAIFineTuneService(FineTuneService):
         logger.debug("Retrieved %d fine-tune job(s) from OpenAI.", len(result))
         return result
 
-    async def _upload_training_file(self, dataset: Dataset) -> str:
+    async def _upload_dataset(self, dataset: Dataset, name: str = "training.jsonl") -> str:
         import io
 
         buffer = io.BytesIO()
@@ -122,7 +129,7 @@ class OpenAIFineTuneService(FineTuneService):
         buffer.seek(0)
 
         upload = await self._client.files.create(
-            file=("training.jsonl", buffer),
+            file=(name, buffer),
             purpose="fine-tune",
         )
 

@@ -51,6 +51,7 @@ class FineTuneService(ABC):
         learning_rate: float,
         batch_size: int,
         n_epochs: int,
+        validation_ds: "Dataset" | None = None,
         **kwargs: Any,
     ) -> FineTuneJob: ...
 

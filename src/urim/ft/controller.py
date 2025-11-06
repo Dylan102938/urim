@@ -28,6 +28,7 @@ class FineTuneRequest:
     batch_size: int
     n_epochs: int
     salt: str = field(default="")
+    validation_ds: Dataset | None = None
     hyperparams: tuple[tuple[str, Hashable], ...] = field(default_factory=tuple)
 
     def serialize(self, cache_dataset: bool = True) -> str:
@@ -39,18 +40,24 @@ class FineTuneRequest:
         if cache_dataset:
             self.train_ds.to_json(storage_subdir("ft", "datasets") / f"{dsid}.jsonl")
 
-        return orjson.dumps(
-            {
-                "model_name": str(self.model_name),
-                "train_ds": dsid,
-                "learning_rate": float(self.learning_rate),
-                "batch_size": int(self.batch_size),
-                "n_epochs": int(self.n_epochs),
-                "salt": str(self.salt),
-                "hyperparams": dict(self.hyperparams),
-            },
-            option=orjson.OPT_SORT_KEYS,
-        ).decode("utf-8")
+        obj = {
+            "model_name": str(self.model_name),
+            "train_ds": dsid,
+            "learning_rate": float(self.learning_rate),
+            "batch_size": int(self.batch_size),
+            "n_epochs": int(self.n_epochs),
+            "salt": str(self.salt),
+            "hyperparams": dict(self.hyperparams),
+        }
+
+        if self.validation_ds:
+            vdsid = hash(self.validation_ds)
+            if cache_dataset:
+                self.validation_ds.to_json(storage_subdir("ft", "datasets") / f"{vdsid}.jsonl")
+
+            obj["validation_ds"] = vdsid
+
+        return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS).decode("utf-8")
 
     @classmethod
     def deserialize(cls, serialized: str) -> Self:
@@ -302,6 +309,7 @@ class FineTuneController:
                     learning_rate=request.learning_rate,
                     batch_size=request.batch_size,
                     n_epochs=request.n_epochs,
+                    validation_ds=request.validation_ds,
                     **dict(request.hyperparams),
                 )
                 logger.debug(
