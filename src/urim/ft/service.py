@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
+from typing_extensions import Self  # noqa: UP035
 
 if TYPE_CHECKING:
     from datetime import datetime

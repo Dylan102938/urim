@@ -41,12 +41,12 @@ class FineTuneRequest:
 
         return orjson.dumps(
             {
-                "model_name": self.model_name,
+                "model_name": str(self.model_name),
                 "train_ds": dsid,
-                "learning_rate": self.learning_rate,
-                "batch_size": self.batch_size,
-                "n_epochs": self.n_epochs,
-                "salt": self.salt,
+                "learning_rate": float(self.learning_rate),
+                "batch_size": int(self.batch_size),
+                "n_epochs": int(self.n_epochs),
+                "salt": str(self.salt),
                 "hyperparams": dict(self.hyperparams),
             },
             option=orjson.OPT_SORT_KEYS,

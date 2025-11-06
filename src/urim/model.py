@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
+from typing_extensions import Self  # noqa: UP035
 
 from urim.store.disk_store import DiskStore
 
@@ -67,12 +67,12 @@ async def model(
 
     ft_store = get_ft_store()
     request = FineTuneRequest(
-        model_name=str(name),
+        model_name=name,
         train_ds=train_ds,
-        learning_rate=float(learning_rate),
-        batch_size=int(batch_size),
-        n_epochs=int(n_epochs),
-        salt=str(salt),
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        n_epochs=n_epochs,
+        salt=salt,
         hyperparams=tuple(sorted(ft_kwargs.items(), key=lambda item: item[0])),
     )
     desc_key = request.serialize(cache_dataset=False)

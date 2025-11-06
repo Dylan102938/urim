@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from urim.ft.service import (
@@ -145,8 +145,8 @@ class OpenAIFineTuneService(FineTuneService):
 
         return OpenAIFineTuneJob(
             id=job.id,
-            created_at=datetime.fromtimestamp(job.created_at, tz=timezone.utc),
-            updated_at=datetime.fromtimestamp(job.created_at, tz=timezone.utc),
+            created_at=datetime.fromtimestamp(job.created_at, tz=UTC),
+            updated_at=datetime.fromtimestamp(job.created_at, tz=UTC),
             status=_STATUS_MAP.get(job.status, FineTuneJobStatus.PENDING),
             service_identifier=self.api_key,
             model_ids=list(model_ids),
