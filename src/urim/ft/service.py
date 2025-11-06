@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from enum import Enum
@@ -22,8 +24,8 @@ class FineTuneJobStatus(Enum):
 
 class FineTuneJob:
     id: FineTuneJobId
-    created_at: "datetime"
-    updated_at: "datetime"
+    created_at: datetime
+    updated_at: datetime
     status: FineTuneJobStatus
     service_identifier: str | None
 
@@ -47,11 +49,11 @@ class FineTuneService(ABC):
         self,
         model: str,
         *,
-        train_ds: "Dataset",
+        train_ds: Dataset,
         learning_rate: float,
         batch_size: int,
         n_epochs: int,
-        validation_ds: "Dataset" | None = None,
+        validation_ds: Dataset | None = None,
         **kwargs: Any,
     ) -> FineTuneJob: ...
 
