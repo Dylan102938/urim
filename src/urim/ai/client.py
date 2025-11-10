@@ -42,6 +42,7 @@ class LLM:
         self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
+        self._provider_cache: dict[str, AsyncOpenAI] = {}
 
     async def chat_completion(
         self,
@@ -71,6 +72,9 @@ class LLM:
         from openai import AsyncOpenAI
 
         from urim.env import collect_openai_keys
+
+        if model in self._provider_cache:
+            return self._provider_cache[model]
 
         openai_keys = collect_openai_keys(explicit_key=self.api_key)
         openrouter_keys = [self.api_key or OPENROUTER_API_KEY]
@@ -125,6 +129,8 @@ class LLM:
                 model,
                 base_url or "openai",
             )
+
+            self._provider_cache[model] = client
             return client
 
         logger.error("No valid client configuration found for model=%s.", model)
