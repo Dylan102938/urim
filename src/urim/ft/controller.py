@@ -28,6 +28,7 @@ class FineTuneRequest:
     batch_size: int
     n_epochs: int
     salt: str = field(default="")
+    validation_ds: Dataset | None = None
     hyperparams: tuple[tuple[str, Hashable], ...] = field(default_factory=tuple)
 
     def serialize(self, cache_dataset: bool = True) -> str:
@@ -39,18 +40,24 @@ class FineTuneRequest:
         if cache_dataset:
             self.train_ds.to_json(storage_subdir("ft", "datasets") / f"{dsid}.jsonl")
 
-        return orjson.dumps(
-            {
-                "model_name": str(self.model_name),
-                "train_ds": dsid,
-                "learning_rate": float(self.learning_rate),
-                "batch_size": int(self.batch_size),
-                "n_epochs": int(self.n_epochs),
-                "salt": str(self.salt),
-                "hyperparams": dict(self.hyperparams),
-            },
-            option=orjson.OPT_SORT_KEYS,
-        ).decode("utf-8")
+        obj = {
+            "model_name": str(self.model_name),
+            "train_ds": dsid,
+            "learning_rate": float(self.learning_rate),
+            "batch_size": int(self.batch_size),
+            "n_epochs": int(self.n_epochs),
+            "salt": str(self.salt),
+            "hyperparams": dict(self.hyperparams),
+        }
+
+        if self.validation_ds:
+            vdsid = hash(self.validation_ds)
+            if cache_dataset:
+                self.validation_ds.to_json(storage_subdir("ft", "datasets") / f"{vdsid}.jsonl")
+
+            obj["validation_ds"] = vdsid
+
+        return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS).decode("utf-8")
 
     @classmethod
     def deserialize(cls, serialized: str) -> Self:
@@ -302,6 +309,7 @@ class FineTuneController:
                     learning_rate=request.learning_rate,
                     batch_size=request.batch_size,
                     n_epochs=request.n_epochs,
+                    validation_ds=request.validation_ds,
                     **dict(request.hyperparams),
                 )
                 logger.debug(
@@ -409,28 +417,33 @@ class FineTuneController:
                 self._inflight_store.remove(request.serialize(cache_dataset=False))
                 await asyncio.to_thread(self._inflight_store.flush)
 
-                dataset_hash = hash(request.train_ds)
-                ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
-                if ds_path.exists():
-                    shared_inflight = any(
-                        hash(other_request.train_ds) == dataset_hash
-                        for other_request in self._inflight
-                        if other_request not in stale
-                    )
-                    if shared_inflight:
-                        logger.debug(
-                            "Keeping cached dataset for request %s; inflight job still uses"
-                            " hash %s.",
-                            request,
-                            dataset_hash,
+                for ds in [request.train_ds, request.validation_ds]:
+                    if ds is None:
+                        continue
+
+                    dataset_hash = hash(ds)
+                    ds_path = storage_subdir("ft", "datasets") / f"{dataset_hash}.jsonl"
+                    if ds_path.exists():
+                        shared_inflight = any(
+                            hash(other_request.train_ds) == dataset_hash
+                            or hash(other_request.validation_ds) == dataset_hash
+                            for other_request in self._inflight
+                            if other_request not in stale
                         )
-                    else:
-                        ds_path.unlink()
-                        logger.debug(
-                            "Removed cached dataset for request %s at %s.",
-                            request,
-                            ds_path,
-                        )
+                        if shared_inflight:
+                            logger.debug(
+                                "Keeping cached dataset for request %s; inflight job still uses"
+                                " hash %s.",
+                                request,
+                                dataset_hash,
+                            )
+                        else:
+                            ds_path.unlink()
+                            logger.debug(
+                                "Removed cached dataset for request %s at %s.",
+                                request,
+                                ds_path,
+                            )
 
                 logger.debug(
                     "Cleaned up completed request %s and removed it from persistence.",

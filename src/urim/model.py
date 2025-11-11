@@ -48,6 +48,7 @@ async def model(
     n_epochs: int = 1,
     learning_rate: float = 1.0,
     salt: str = "",
+    validation_ds: Dataset | None = None,
     **ft_kwargs: Any,
 ) -> ModelRef:
     from urim.ft.controller import FineTuneRequest
@@ -73,6 +74,7 @@ async def model(
         batch_size=batch_size,
         n_epochs=n_epochs,
         salt=salt,
+        validation_ds=validation_ds,
         hyperparams=tuple(sorted(ft_kwargs.items(), key=lambda item: item[0])),
     )
     desc_key = request.serialize(cache_dataset=False)
