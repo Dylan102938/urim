@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from urim.ai.client import LLM
+from urim.ai.client import _PROVIDER_CACHE, chat_completion
 from urim.env import collect_openai_keys
 
 requires_llm = pytest.mark.requires_llm
@@ -24,16 +24,14 @@ def test_collect_openai_keys_order_and_dedupe(monkeypatch: pytest.MonkeyPatch) -
 
 @requires_llm
 async def test_client_calls_openai() -> None:
-    client = LLM()
     keys = collect_openai_keys()
 
     if len(keys) == 0:
         pytest.skip("No OpenAI keys found")
 
-    client = LLM()
-    result = await client.chat_completion(
+    result = await chat_completion(
         model="gpt-4.1-nano",
-        prompt="Hi there",
+        messages=[{"role": "user", "content": "Hi there"}],
         max_tokens=1,
         temperature=0.0,
     )
@@ -41,3 +39,41 @@ async def test_client_calls_openai() -> None:
     assert result.content is not None
     assert result.raw is not None
     assert result.top_tokens is None
+
+
+@requires_llm
+async def test_client_reuse_same_instance() -> None:
+    keys = collect_openai_keys()
+
+    if len(keys) == 0:
+        pytest.skip("No OpenAI keys found")
+
+    test_model = "gpt-4.1-nano"
+    _PROVIDER_CACHE.clear()
+
+    result1 = await chat_completion(
+        model=test_model,
+        messages=[{"role": "user", "content": "First prompt"}],
+        max_tokens=1,
+        temperature=0.0,
+    )
+
+    assert result1.content is not None
+
+    first_client = _PROVIDER_CACHE.get(test_model)
+    assert first_client is not None
+
+    result2 = await chat_completion(
+        model=test_model,
+        messages=[{"role": "user", "content": "Second prompt"}],
+        max_tokens=1,
+        temperature=0.0,
+    )
+
+    assert result2.content is not None
+
+    second_client = _PROVIDER_CACHE.get(test_model)
+    assert second_client is not None
+    assert first_client is second_client, "Client instance should be reused for the same model"
+
+    _PROVIDER_CACHE.clear()
