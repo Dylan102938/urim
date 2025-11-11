@@ -33,11 +33,9 @@ def completions_stub(monkeypatch: pytest.MonkeyPatch, completion: str) -> dict[s
     call_counts: dict[str, Any] = {"count": 0}
 
     async def _stub(
-        _: Any,  # noqa: ANN001
         _model: str,
         *,
         _messages: Any | None = None,
-        _prompt: Any | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         call_counts["count"] += 1
@@ -53,7 +51,7 @@ def completions_stub(monkeypatch: pytest.MonkeyPatch, completion: str) -> dict[s
 
         return ChatResult(content=completion, top_tokens=top, raw={"ok": True})
 
-    monkeypatch.setattr("urim.ai.client.LLM.chat_completion", _stub, raising=True)
+    monkeypatch.setattr("urim.ai.client.chat_completion", _stub, raising=True)
 
     return call_counts
 

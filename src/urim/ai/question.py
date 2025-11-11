@@ -193,10 +193,10 @@ class Question(ABC, Generic[EvalType]):
 
 class FreeForm(Question[str]):
     async def fetch(self, model: str) -> QuestionResult[str]:
-        from urim.ai.client import LLM
+        from urim.ai.client import chat_completion
 
         messages = self.resolve_to_messages()
-        completion = await LLM().chat_completion(model, messages=messages, **self.kwargs)
+        completion = await chat_completion(model, messages=messages, **self.kwargs)
         extra: dict[str, Any] = {}
         if self.enable_cot:
             completion, extra = self.parse_cot(completion)
@@ -316,14 +316,14 @@ class Rating(Question[float]):
         self.refusal_threshold = refusal_threshold
 
     async def fetch(self, model: str) -> QuestionResult[float]:
-        from urim.ai.client import LLM
+        from urim.ai.client import chat_completion
 
         kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
         if not self.enable_cot:
             kwargs.update({"max_tokens": 1, "temperature": 0.0})
 
         messages = self.resolve_to_messages()
-        completion = await LLM().chat_completion(
+        completion = await chat_completion(
             model,
             messages=messages,
             **{**kwargs, **self.kwargs},
@@ -376,14 +376,14 @@ class NextToken(Question):
         super().__init__(*args, top_logprobs=top_logprobs, **kwargs)
 
     async def fetch(self, model: str) -> QuestionResult[str]:
-        from urim.ai.client import LLM
+        from urim.ai.client import chat_completion
 
         kwargs: dict[str, Any] = {"logprobs": True, "convert_to_probs": True}
         if not self.enable_cot:
             kwargs.update({"max_tokens": 1, "temperature": 0.0})
 
         messages = self.resolve_to_messages()
-        completion = await LLM().chat_completion(
+        completion = await chat_completion(
             model,
             messages=messages,
             **{**kwargs, **self.kwargs},

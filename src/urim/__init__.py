@@ -1,4 +1,4 @@
-from .ai.client import LLM, ChatResult
+from .ai.client import ChatResult, chat_completion
 from .ai.question import ExtractFunction, ExtractJSON, FreeForm, NextToken, Question, Rating
 from .dataset import Dataset
 from .logging import configure_logger, get_logger, set_module_level
@@ -6,7 +6,7 @@ from .model import ModelRef, model
 from .version import __version__
 
 __all__ = [
-    "LLM",
+    "chat_completion",
     "ChatResult",
     "Question",
     "FreeForm",
