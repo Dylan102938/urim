@@ -398,14 +398,6 @@ class Dataset:
             all_values = [result[1].get(extra_column, None) for result in results]
             df[extra_column] = all_values
 
-        extra_columns: dict[str, list[Any]] = defaultdict(list)
-        for extra in [result[1] for result in results]:
-            for k, v in extra.items():
-                extra_columns[k].append(v)
-
-        for k, v in extra_columns.items():
-            df[k] = v
-
         if judges is None:
             return self._maybe_inplace(df, inplace=inplace)
 
