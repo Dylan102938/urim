@@ -390,6 +390,14 @@ class Dataset:
         df = self._df.copy()
         df[out_col] = [result[0] for result in results]
 
+        all_extra_columns: set[str] = set()
+        for extra in [result[1] for result in results]:
+            all_extra_columns.update(extra.keys())
+
+        for extra_column in all_extra_columns:
+            all_values = [result[1].get(extra_column, None) for result in results]
+            df[extra_column] = all_values
+
         extra_columns: dict[str, list[Any]] = defaultdict(list)
         for extra in [result[1] for result in results]:
             for k, v in extra.items():
@@ -417,14 +425,14 @@ class Dataset:
         judge_results = await self._resolve_judge_questions(judge_questions)
         for k, results in judge_results.items():
             df[k] = [result[0] for result in results]
-            extra_columns = defaultdict(list)
 
+            judge_extra_columns: set[str] = set()
             for extra in [result[1] for result in results]:
-                for extra_k, v in extra.items():
-                    extra_columns[extra_k].append(v)
+                judge_extra_columns.update(extra.keys())
 
-            for extra_k, v in extra_columns.items():
-                df[f"{k}_{extra_k}"] = v
+            for extra_column in judge_extra_columns:
+                all_values = [result[1].get(extra_column, None) for result in results]
+                df[f"{k}_{extra_column}"] = all_values
 
         return self._maybe_inplace(df, inplace=inplace)
 
